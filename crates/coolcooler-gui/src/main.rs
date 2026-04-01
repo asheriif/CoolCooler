@@ -1,5 +1,6 @@
 mod canvas;
 mod preset;
+mod tray;
 mod widget;
 
 use std::fs::File;
@@ -19,7 +20,8 @@ use iced::widget::{
     text_input,
 };
 use iced::{
-    mouse, Background, Border, Color, Element, Length, Point, Size, Subscription, Task, Theme,
+    mouse, window, Background, Border, Color, Element, Length, Point, Size, Subscription, Task,
+    Theme,
 };
 use image::{imageops, AnimationDecoder, DynamicImage, Rgba, RgbaImage};
 use widget::{LcdWidget, WidgetContext, sysinfo_backend::SysInfoBackend};
@@ -113,12 +115,32 @@ impl std::fmt::Display for LayerOption {
 // -- App --
 
 fn main() -> iced::Result {
-    iced::application(CoolCooler::new, CoolCooler::update, CoolCooler::view)
+    ensure_single_instance();
+
+    iced::daemon(CoolCooler::boot, CoolCooler::update, CoolCooler::view)
         .subscription(CoolCooler::subscription)
         .theme(CoolCooler::theme)
+        .title("CoolCooler")
         .antialiasing(true)
-        .window_size(Size::new(820.0, 1000.0))
         .run()
+}
+
+fn ensure_single_instance() {
+    use std::fs::File;
+
+    let dir = std::env::var("XDG_RUNTIME_DIR")
+        .or_else(|_| std::env::var("TEMP"))
+        .unwrap_or_else(|_| "/tmp".to_string());
+    let lock = File::create(format!("{dir}/coolcooler.lock")).expect("failed to create lock file");
+
+    if lock.try_lock().is_err() {
+        eprintln!("CoolCooler is already running.");
+        std::process::exit(0);
+    }
+
+    // Leak the handle so the lock persists until process exit.
+    // The OS releases it automatically on crash/exit.
+    std::mem::forget(lock);
 }
 
 struct CoolCooler {
@@ -165,6 +187,11 @@ struct CoolCooler {
     display_active: bool,
     stop_signal: Arc<AtomicBool>,
     device_frame: Arc<Mutex<Vec<u8>>>,
+
+    // Tray icon
+    _tray_handle: tray::TrayHandle,
+    tray_rx: Arc<Mutex<std::sync::mpsc::Receiver<tray::TrayEvent>>>,
+    window_id: Option<window::Id>,
 }
 
 #[derive(Debug, Clone)]
@@ -198,12 +225,18 @@ enum Message {
     DeletePreset(String),
     PresetSourceLoaded(Result<LoadedData, String>, preset::PresetData),
     ToggleTheme,
+    WindowClosed(window::Id),
+    TrayPoll,
+    ShowWindow,
     Quit,
 }
 
 impl CoolCooler {
-    fn new() -> Self {
+    fn boot() -> (Self, Task<Message>) {
         let (connected, info) = detect_device();
+        let (tray_handle, tray_rx) = tray::spawn();
+
+        let (id, open_task) = window::open(app_window_settings());
 
         let mut app = Self {
             dark_mode: true,
@@ -234,9 +267,12 @@ impl CoolCooler {
             display_active: false,
             stop_signal: Arc::new(AtomicBool::new(false)),
             device_frame: Arc::new(Mutex::new(Vec::new())),
+            _tray_handle: tray_handle,
+            tray_rx: Arc::new(Mutex::new(tray_rx)),
+            window_id: Some(id),
         };
         app.rebuild_preview();
-        app
+        (app, open_task.discard())
     }
 
     fn has_source(&self) -> bool {
@@ -794,6 +830,29 @@ impl CoolCooler {
             Message::ToggleTheme => {
                 self.dark_mode = !self.dark_mode;
             }
+            Message::TrayPoll => {
+                let got_show = matches!(
+                    self.tray_rx.lock().unwrap().try_recv(),
+                    Ok(tray::TrayEvent::ShowWindow)
+                );
+                if got_show {
+                    return self.update(Message::ShowWindow);
+                }
+            }
+            Message::WindowClosed(id) => {
+                if self.window_id == Some(id) {
+                    self.window_id = None;
+                }
+            }
+            Message::ShowWindow => {
+                if self.window_id.is_some() {
+                    // Window already open, just focus it
+                    return window::gain_focus(self.window_id.unwrap());
+                }
+                let (id, task) = window::open(app_window_settings());
+                self.window_id = Some(id);
+                return task.discard();
+            }
             Message::Quit => {
                 self.stop_signal.store(true, Ordering::Relaxed);
                 return iced::exit();
@@ -802,7 +861,7 @@ impl CoolCooler {
         Task::none()
     }
 
-    fn view(&self) -> Element<'_, Message> {
+    fn view(&self, _window_id: window::Id) -> Element<'_, Message> {
         let c = self.colors();
 
         let title_row = row![
@@ -1370,7 +1429,7 @@ impl CoolCooler {
         .into()
     }
 
-    fn theme(&self) -> Theme {
+    fn theme(&self, _window_id: window::Id) -> Theme {
         let c = self.colors();
         Theme::custom(
             "CoolCooler".to_string(),
@@ -1387,6 +1446,14 @@ impl CoolCooler {
 
     fn subscription(&self) -> Subscription<Message> {
         let mut subs = Vec::new();
+
+        // Track when window is closed (minimize to tray)
+        subs.push(window::close_events().map(Message::WindowClosed));
+
+        // Poll tray icon events (250ms is responsive enough for a click-to-show)
+        subs.push(
+            iced::time::every(Duration::from_millis(250)).map(|_| Message::TrayPoll),
+        );
 
         // 30ms tick for GIF animation
         if self.is_animated() {
@@ -1605,6 +1672,26 @@ fn circular_preview_from_rgba(mut rgba: RgbaImage) -> iced::widget::image::Handl
     }
 
     iced::widget::image::Handle::from_rgba(w, h, rgba.into_raw())
+}
+
+// -- Window --
+
+fn app_window_settings() -> window::Settings {
+    let icon = window::icon::from_file_data(
+        include_bytes!("../../../assets/tray_icon.png"),
+        Some(image::ImageFormat::Png),
+    )
+    .ok();
+
+    window::Settings {
+        size: Size::new(820.0, 1000.0),
+        icon,
+        platform_specific: window::settings::PlatformSpecific {
+            application_id: "coolcooler".to_string(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
 }
 
 // -- Device --
