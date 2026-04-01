@@ -1,0 +1,8 @@
+[package]
+name = "coolcooler-idcooling"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+coolcooler-core = { path = "../coolcooler-core" }
+hidapi = { version = "2", default-features = false, features = ["linux-static-libusb"] }

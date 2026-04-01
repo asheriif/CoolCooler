@@ -1,0 +1,15 @@
+[package]
+name = "coolcooler-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "coolcooler"
+path = "src/main.rs"
+
+[dependencies]
+coolcooler-core = { path = "../coolcooler-core" }
+coolcooler-idcooling = { path = "../coolcooler-idcooling" }
+clap = { version = "4", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "bmp", "webp"] }
+ctrlc = "3"

@@ -1,0 +1,11 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+# opt-level 1 for dev builds: needed for image/media processing to be usable.
+# opt-level 2 for dependencies: they benefit from full optimization.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
