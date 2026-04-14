@@ -105,9 +105,7 @@ impl Canvas {
         // Count widget types for numbering duplicates
         let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
         for layer in &self.layers {
-            *counts
-                .entry(layer.widget.descriptor().name)
-                .or_default() += 1;
+            *counts.entry(layer.widget.descriptor().name).or_default() += 1;
         }
 
         let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();

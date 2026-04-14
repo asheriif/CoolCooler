@@ -12,19 +12,18 @@ use std::time::{Duration, Instant};
 
 use canvas::{Canvas, LayerSelection, Viewport};
 use coolcooler_core::frame::{self, DEFAULT_JPEG_QUALITY};
-use coolcooler_core::{CoolerLcd, DeviceInfo};
-use coolcooler_idcooling::Fx360;
+use coolcooler_core::DeviceInfo;
+use coolcooler_driver::{widgets_allowed, DisplayCapability};
 use fast_image_resize as fir;
 use iced::widget::{
-    button, column, container, mouse_area, pick_list, row, scrollable, slider, text,
-    text_input,
+    button, column, container, mouse_area, pick_list, row, scrollable, slider, text, text_input,
 };
 use iced::{
     mouse, window, Background, Border, Color, Element, Length, Point, Size, Subscription, Task,
     Theme,
 };
 use image::{imageops, AnimationDecoder, DynamicImage, Rgba, RgbaImage};
-use widget::{LcdWidget, WidgetContext, sysinfo_backend::SysInfoBackend};
+use widget::{sysinfo_backend::SysInfoBackend, LcdWidget, WidgetContext};
 
 // -- Colors --
 
@@ -145,8 +144,9 @@ fn ensure_single_instance() {
 
 struct CoolCooler {
     dark_mode: bool,
-    device_info: DeviceInfo,
-    device_connected: bool,
+    driver_info: DeviceInfo,
+    driver_capability: DisplayCapability,
+    driver_connected: bool,
     selected_path: Option<PathBuf>,
 
     // Source data
@@ -233,15 +233,27 @@ enum Message {
 
 impl CoolCooler {
     fn boot() -> (Self, Task<Message>) {
-        let (connected, info) = detect_device();
+        let (connected, info, capability) = match coolcooler_driver::detect_device() {
+            Some(driver) => {
+                let info = driver.info().clone();
+                let cap = driver.capability();
+                (true, info, cap)
+            }
+            None => {
+                // No device found — show UI in disconnected state with default info
+                let info = DeviceInfo::default();
+                (false, info, DisplayCapability::Streaming)
+            }
+        };
         let (tray_handle, tray_rx) = tray::spawn();
 
         let (id, open_task) = window::open(app_window_settings());
 
         let mut app = Self {
             dark_mode: true,
-            device_info: info,
-            device_connected: connected,
+            driver_info: info,
+            driver_capability: capability,
+            driver_connected: connected,
             selected_path: None,
             source_frames: Vec::new(),
             filename: String::new(),
@@ -284,11 +296,15 @@ impl CoolCooler {
     }
 
     fn colors(&self) -> &'static AppColors {
-        if self.dark_mode { &DARK } else { &LIGHT }
+        if self.dark_mode {
+            &DARK
+        } else {
+            &LIGHT
+        }
     }
 
     fn lcd_size(&self) -> u32 {
-        self.device_info.resolution.width
+        self.driver_info.resolution.width
     }
 
     /// Render the full composited 240x240 RGBA (base + widgets).
@@ -296,7 +312,7 @@ impl CoolCooler {
         let lcd = self.lcd_size();
         let base = if let Some(src) = self.source_frames.get(self.current_frame) {
             let vp = &self.canvas.base_viewport;
-            render_base_rgba(&src.rgba, &self.device_info, vp.zoom, vp.pan)
+            render_base_rgba(&src.rgba, &self.driver_info, vp.zoom, vp.pan)
         } else {
             RgbaImage::from_pixel(lcd, lcd, Rgba([0, 0, 0, 255]))
         };
@@ -376,7 +392,7 @@ impl CoolCooler {
 
     /// Start (or restart) the device display thread.
     fn start_display(&mut self) {
-        if !self.device_connected {
+        if !self.driver_connected {
             return;
         }
         self.stop_signal.store(true, Ordering::Relaxed);
@@ -388,9 +404,14 @@ impl CoolCooler {
 
         self.push_device_frame();
 
-        std::thread::spawn(move || {
-            run_display(shared, &stop);
-        });
+        // Detect a fresh driver instance for the display thread.
+        // Each display session gets its own connection.
+        if let Some(driver) = coolcooler_driver::detect_device() {
+            let shared_clone = shared;
+            std::thread::spawn(move || {
+                coolcooler_driver::run_display(driver, shared_clone, &stop);
+            });
+        }
 
         self.display_active = true;
     }
@@ -398,12 +419,23 @@ impl CoolCooler {
     /// Encode the current composited frame and push to the device thread.
     fn push_device_frame(&self) {
         let composited = self.render_composited();
-        let rgb = DynamicImage::ImageRgba8(composited).to_rgb8();
-        if let Ok(jpeg) =
-            frame::encode_resized(&rgb, self.device_info.rotation, DEFAULT_JPEG_QUALITY)
-        {
+        let encoded = match self.driver_capability {
+            DisplayCapability::Streaming => {
+                let rgb = DynamicImage::ImageRgba8(composited).to_rgb8();
+                frame::encode_resized(&rgb, self.driver_info.rotation, DEFAULT_JPEG_QUALITY).ok()
+            }
+            DisplayCapability::FileTransfer => {
+                // PNG encode — liquidctl handles resizing/format conversion
+                let mut buf = std::io::Cursor::new(Vec::new());
+                DynamicImage::ImageRgba8(composited)
+                    .write_to(&mut buf, image::ImageFormat::Png)
+                    .ok()
+                    .map(|()| buf.into_inner())
+            }
+        };
+        if let Some(bytes) = encoded {
             if let Ok(mut frame) = self.device_frame.lock() {
-                *frame = jpeg;
+                *frame = bytes;
             }
         }
     }
@@ -470,6 +502,14 @@ impl CoolCooler {
                             })
                             .collect();
 
+                        // On file-transfer devices, clear widgets when loading a GIF
+                        if !widgets_allowed(self.driver_capability, count > 1)
+                            && !self.canvas.layers.is_empty()
+                        {
+                            self.canvas.layers.clear();
+                            self.canvas.active_layer = LayerSelection::Base;
+                        }
+
                         let detail = if count > 1 {
                             format!(" ({count} frames)")
                         } else {
@@ -490,8 +530,7 @@ impl CoolCooler {
                 if self.is_animated() {
                     let dur = self.source_frames[self.current_frame].duration;
                     if self.last_advance.elapsed() >= dur {
-                        self.current_frame =
-                            (self.current_frame + 1) % self.source_frames.len();
+                        self.current_frame = (self.current_frame + 1) % self.source_frames.len();
                         self.last_advance = Instant::now();
                         self.rebuild_preview();
                         if self.display_active {
@@ -627,6 +666,10 @@ impl CoolCooler {
                 self.selected_category = cat;
             }
             Message::AddWidget(catalog_idx) => {
+                // Block adding widgets when GIF is loaded on a file-transfer device
+                if !widgets_allowed(self.driver_capability, self.is_animated()) {
+                    return Task::none();
+                }
                 if let Some(template) = self.widget_catalog.get(catalog_idx) {
                     let instance = template.create_instance();
                     let id = self.canvas.add_widget(instance, self.lcd_size());
@@ -763,9 +806,7 @@ impl CoolCooler {
                                 self.status_message = "Loading preset...".to_string();
                                 let path_clone = path.clone();
                                 return Task::perform(
-                                    async move {
-                                        load_source_data(&path_clone, filename)
-                                    },
+                                    async move { load_source_data(&path_clone, filename) },
                                     move |result| Message::PresetSourceLoaded(result, data),
                                 );
                             }
@@ -778,8 +819,7 @@ impl CoolCooler {
                         self.current_frame = 0;
                         self.apply_preset_config(&data);
                         self.start_display();
-                        self.status_message =
-                            format!("Loaded preset '{}'", data.name);
+                        self.status_message = format!("Loaded preset '{}'", data.name);
                     }
                     Err(e) => self.status_message = format!("Load failed: {e}"),
                 }
@@ -799,17 +839,17 @@ impl CoolCooler {
                             .collect();
                         self.filename = loaded.filename;
                         // Set selected_path to the preset's background file
-                        if let Some(ref bg) = data.background {
-                            let preset_dir = PathBuf::from("presets")
-                                .join(self.current_preset_folder.as_deref().unwrap_or(""));
-                            self.selected_path = Some(preset_dir.join(&bg.file));
+                        if let (Some(bg), Some(folder)) = (
+                            data.background.as_ref(),
+                            self.current_preset_folder.as_deref(),
+                        ) {
+                            self.selected_path = Some(preset::preset_file_path(folder, &bg.file));
                         }
                         self.current_frame = 0;
                         self.last_advance = Instant::now();
                         self.apply_preset_config(&data);
                         self.start_display();
-                        self.status_message =
-                            format!("Loaded preset '{}'", data.name);
+                        self.status_message = format!("Loaded preset '{}'", data.name);
                     }
                     Err(e) => self.status_message = format!("Load failed: {e}"),
                 }
@@ -845,9 +885,9 @@ impl CoolCooler {
                 }
             }
             Message::ShowWindow => {
-                if self.window_id.is_some() {
+                if let Some(window_id) = self.window_id {
                     // Window already open, just focus it
-                    return window::gain_focus(self.window_id.unwrap());
+                    return window::gain_focus(window_id);
                 }
                 let (id, task) = window::open(app_window_settings());
                 self.window_id = Some(id);
@@ -876,8 +916,8 @@ impl CoolCooler {
         .align_y(iced::Alignment::Center);
 
         // -- Device card --
-        let device_content = if self.device_connected {
-            let info = &self.device_info;
+        let device_content = if self.driver_connected {
+            let info = &self.driver_info;
             let (w, h) = (info.resolution.width, info.resolution.height);
             column![
                 section_label("DEVICE", c),
@@ -912,8 +952,7 @@ impl CoolCooler {
             circular_preview_from_rgba(RgbaImage::from_pixel(lcd, lcd, Rgba([0, 0, 0, 255])))
         });
 
-        let is_widget_selected =
-            matches!(self.canvas.active_layer, LayerSelection::Widget(_));
+        let is_widget_selected = matches!(self.canvas.active_layer, LayerSelection::Widget(_));
         let cursor_style = if self.dragging {
             mouse::Interaction::Grabbing
         } else if is_widget_selected {
@@ -924,16 +963,12 @@ impl CoolCooler {
 
         let preview_inner: Element<Message> = row![
             iced::widget::space().width(Length::Fill),
-            mouse_area(
-                iced::widget::image(handle)
-                    .width(lcd_size)
-                    .height(lcd_size),
-            )
-            .on_scroll(Message::Scroll)
-            .on_press(Message::DragStart)
-            .on_release(Message::DragEnd)
-            .on_move(Message::DragMove)
-            .interaction(cursor_style),
+            mouse_area(iced::widget::image(handle).width(lcd_size).height(lcd_size),)
+                .on_scroll(Message::Scroll)
+                .on_press(Message::DragStart)
+                .on_release(Message::DragEnd)
+                .on_move(Message::DragMove)
+                .interaction(cursor_style),
             iced::widget::space().width(Length::Fill),
         ]
         .into();
@@ -1047,120 +1082,116 @@ impl CoolCooler {
             };
 
         let preview_card = card(
-            column![canvas_header, preview_inner, layer_controls].spacing(12), c
+            column![canvas_header, preview_inner, layer_controls].spacing(12),
+            c,
         );
 
         // -- Widget config panel (only when a widget layer is selected) --
         let widget_config: Option<Element<Message>> =
             if let LayerSelection::Widget(id) = self.canvas.active_layer {
-                self.canvas
-                    .layers
-                    .iter()
-                    .find(|l| l.id == id)
-                    .map(|layer| {
-                        let opacity_val = layer.opacity as f32 / 255.0;
-                        let mut config_items = column![row![
-                            text("Opacity").size(12).color(c.text_dim).width(60),
-                            slider(0.0..=1.0, opacity_val, Message::SetWidgetOpacity)
-                                .step(0.01)
-                                .width(Length::Fill),
-                            text(format!("{}%", (opacity_val * 100.0) as u32))
-                                .size(11)
-                                .color(c.text_dim)
-                                .width(35),
-                        ]
-                        .spacing(8)
-                        .align_y(iced::Alignment::Center)]
-                        .spacing(8);
+                self.canvas.layers.iter().find(|l| l.id == id).map(|layer| {
+                    let opacity_val = layer.opacity as f32 / 255.0;
+                    let mut config_items = column![row![
+                        text("Opacity").size(12).color(c.text_dim).width(60),
+                        slider(0.0..=1.0, opacity_val, Message::SetWidgetOpacity)
+                            .step(0.01)
+                            .width(Length::Fill),
+                        text(format!("{}%", (opacity_val * 100.0) as u32))
+                            .size(11)
+                            .color(c.text_dim)
+                            .width(35),
+                    ]
+                    .spacing(8)
+                    .align_y(iced::Alignment::Center)]
+                    .spacing(8);
 
-                        // Text color swatches (only for widgets that support it)
-                        if layer.widget.supports_text_color() {
-                            let current_color = layer.widget.text_color();
-                            let colors: Vec<([u8; 4], &str)> = vec![
-                                ([255, 255, 255, 255], "White"),
-                                ([220, 220, 220, 255], "Light Gray"),
-                                ([80, 255, 80, 255], "Green"),
-                                ([255, 80, 60, 255], "Red"),
-                                ([0, 180, 255, 255], "Cyan"),
-                                ([255, 200, 50, 255], "Gold"),
-                                ([255, 140, 0, 255], "Orange"),
-                                ([200, 80, 255, 255], "Purple"),
-                                ([255, 105, 180, 255], "Pink"),
-                            ];
+                    // Text color swatches (only for widgets that support it)
+                    if layer.widget.supports_text_color() {
+                        let current_color = layer.widget.text_color();
+                        let colors: Vec<([u8; 4], &str)> = vec![
+                            ([255, 255, 255, 255], "White"),
+                            ([220, 220, 220, 255], "Light Gray"),
+                            ([80, 255, 80, 255], "Green"),
+                            ([255, 80, 60, 255], "Red"),
+                            ([0, 180, 255, 255], "Cyan"),
+                            ([255, 200, 50, 255], "Gold"),
+                            ([255, 140, 0, 255], "Orange"),
+                            ([200, 80, 255, 255], "Purple"),
+                            ([255, 105, 180, 255], "Pink"),
+                        ];
 
-                            let mut swatches = row![text("Color").size(12).color(c.text_dim).width(60)]
-                                .spacing(4)
-                                .align_y(iced::Alignment::Center);
+                        let mut swatches = row![text("Color").size(12).color(c.text_dim).width(60)]
+                            .spacing(4)
+                            .align_y(iced::Alignment::Center);
 
-                            for (color, _name) in &colors {
-                                let c = *color;
-                                let is_selected = current_color[0..3] == c[0..3];
-                                let border_color = if is_selected {
-                                    Color::WHITE
-                                } else {
-                                    Color::TRANSPARENT
-                                };
-                                let swatch_color = Color::from_rgb8(c[0], c[1], c[2]);
+                        for (color, _name) in &colors {
+                            let c = *color;
+                            let is_selected = current_color[0..3] == c[0..3];
+                            let border_color = if is_selected {
+                                Color::WHITE
+                            } else {
+                                Color::TRANSPARENT
+                            };
+                            let swatch_color = Color::from_rgb8(c[0], c[1], c[2]);
 
-                                swatches = swatches.push(
-                                    button(text("").width(14).height(14))
-                                        .padding(0)
-                                        .width(18)
-                                        .height(18)
-                                        .style(move |_: &Theme, _| button::Style {
-                                            background: Some(Background::Color(swatch_color)),
-                                            border: Border {
-                                                radius: 3.0.into(),
-                                                width: 2.0,
-                                                color: border_color,
-                                            },
-                                            ..Default::default()
-                                        })
-                                        .on_press(Message::SetWidgetTextColor(c)),
-                                );
-                            }
-
-                            config_items = config_items.push(swatches);
-
-                        }
-
-                        // Font dropdown (for widgets that support it)
-                        if layer.widget.supports_font() {
-                            let font_names: Vec<String> = widget::fonts::font_names()
-                                .into_iter()
-                                .map(|s| s.to_string())
-                                .collect();
-                            let current_font = layer.widget.font_name().to_string();
-                            config_items = config_items.push(
-                                row![
-                                    text("Font").size(12).color(c.text_dim).width(60),
-                                    pick_list(font_names, Some(current_font), Message::SetWidgetFont)
-                                        .width(Length::Fill)
-                                        .text_size(12),
-                                ]
-                                .spacing(8)
-                                .align_y(iced::Alignment::Center),
+                            swatches = swatches.push(
+                                button(text("").width(14).height(14))
+                                    .padding(0)
+                                    .width(18)
+                                    .height(18)
+                                    .style(move |_: &Theme, _| button::Style {
+                                        background: Some(Background::Color(swatch_color)),
+                                        border: Border {
+                                            radius: 3.0.into(),
+                                            width: 2.0,
+                                            color: border_color,
+                                        },
+                                        ..Default::default()
+                                    })
+                                    .on_press(Message::SetWidgetTextColor(c)),
                             );
                         }
 
-                        // Text content input (for FreeText widget)
-                        if layer.widget.supports_text_edit() {
-                            let current_text = layer.widget.text_content().to_string();
-                            config_items = config_items.push(
-                                row![
-                                    text("Text").size(12).color(c.text_dim).width(60),
-                                    iced::widget::text_input("Enter text...", &current_text)
-                                        .on_input(Message::SetWidgetText)
-                                        .size(12)
-                                        .width(Length::Fill),
-                                ]
-                                .spacing(8)
-                                .align_y(iced::Alignment::Center),
-                            );
-                        }
+                        config_items = config_items.push(swatches);
+                    }
 
-                        card(config_items, c).into()
-                    })
+                    // Font dropdown (for widgets that support it)
+                    if layer.widget.supports_font() {
+                        let font_names: Vec<String> = widget::fonts::font_names()
+                            .into_iter()
+                            .map(|s| s.to_string())
+                            .collect();
+                        let current_font = layer.widget.font_name().to_string();
+                        config_items = config_items.push(
+                            row![
+                                text("Font").size(12).color(c.text_dim).width(60),
+                                pick_list(font_names, Some(current_font), Message::SetWidgetFont)
+                                    .width(Length::Fill)
+                                    .text_size(12),
+                            ]
+                            .spacing(8)
+                            .align_y(iced::Alignment::Center),
+                        );
+                    }
+
+                    // Text content input (for FreeText widget)
+                    if layer.widget.supports_text_edit() {
+                        let current_text = layer.widget.text_content().to_string();
+                        config_items = config_items.push(
+                            row![
+                                text("Text").size(12).color(c.text_dim).width(60),
+                                iced::widget::text_input("Enter text...", &current_text)
+                                    .on_input(Message::SetWidgetText)
+                                    .size(12)
+                                    .width(Length::Fill),
+                            ]
+                            .spacing(8)
+                            .align_y(iced::Alignment::Center),
+                        );
+                    }
+
+                    card(config_items, c).into()
+                })
             } else {
                 None
             };
@@ -1181,7 +1212,8 @@ impl CoolCooler {
         } else {
             "Save Preset"
         };
-        let save_btn = styled_button(save_label, ButtonKind::Default, c).on_press(Message::ShowSaveDialog);
+        let save_btn =
+            styled_button(save_label, ButtonKind::Default, c).on_press(Message::ShowSaveDialog);
 
         let mut preset_buttons = row![save_btn].spacing(8);
         if self.current_preset_name.is_some() {
@@ -1213,53 +1245,68 @@ impl CoolCooler {
             .push(quit_btn);
 
         // -- Right panel: widget catalog --
-        let categories: Vec<String> = widget::categories(&self.widget_catalog)
-            .into_iter()
-            .map(|s| s.to_string())
-            .collect();
+        let right_panel = if !widgets_allowed(self.driver_capability, self.is_animated()) {
+            card(
+                column![
+                    text("Widgets").size(18).color(c.text_primary),
+                    text("Widgets with animated backgrounds are not supported on this device.")
+                        .size(13)
+                        .color(c.text_dim),
+                ]
+                .spacing(12),
+                c,
+            )
+            .width(Length::FillPortion(3))
+            .height(Length::Fill)
+        } else {
+            let categories: Vec<String> = widget::categories(&self.widget_catalog)
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect();
 
-        let category_picker = pick_list(
-            categories,
-            Some(self.selected_category.clone()),
-            Message::SelectCategory,
-        )
-        .width(Length::Fill)
-        .text_size(13);
+            let category_picker = pick_list(
+                categories,
+                Some(self.selected_category.clone()),
+                Message::SelectCategory,
+            )
+            .width(Length::Fill)
+            .text_size(13);
 
-        let mut catalog_items = column![].spacing(6);
-        for (i, w) in self.widget_catalog.iter().enumerate() {
-            let desc = w.descriptor();
-            if desc.category != self.selected_category {
-                continue;
-            }
-            catalog_items = catalog_items.push(
-                button(text(desc.name).size(13).color(c.text_primary).center())
-                    .padding([8, 12])
-                    .width(Length::Fill)
-                    .style(|_: &Theme, _| button::Style {
-                        background: Some(Background::Color(c.surface)),
-                        text_color: c.text_primary,
-                        border: Border {
-                            radius: 8.0.into(),
+            let mut catalog_items = column![].spacing(6);
+            for (i, w) in self.widget_catalog.iter().enumerate() {
+                let desc = w.descriptor();
+                if desc.category != self.selected_category {
+                    continue;
+                }
+                catalog_items = catalog_items.push(
+                    button(text(desc.name).size(13).color(c.text_primary).center())
+                        .padding([8, 12])
+                        .width(Length::Fill)
+                        .style(|_: &Theme, _| button::Style {
+                            background: Some(Background::Color(c.surface)),
+                            text_color: c.text_primary,
+                            border: Border {
+                                radius: 8.0.into(),
+                                ..Default::default()
+                            },
                             ..Default::default()
-                        },
-                        ..Default::default()
-                    })
-                    .on_press(Message::AddWidget(i)),
-            );
-        }
+                        })
+                        .on_press(Message::AddWidget(i)),
+                );
+            }
 
-        let right_panel = card(
-            column![
-                text("Widgets").size(18).color(c.text_primary),
-                category_picker,
-                catalog_items,
-            ]
-            .spacing(12),
-            c,
-        )
-        .width(Length::FillPortion(3))
-        .height(Length::Fill);
+            card(
+                column![
+                    text("Widgets").size(18).color(c.text_primary),
+                    category_picker,
+                    catalog_items,
+                ]
+                .spacing(12),
+                c,
+            )
+            .width(Length::FillPortion(3))
+            .height(Length::Fill)
+        };
 
         // -- Footer --
         let footer = text("Made with ♥ by asheriif")
@@ -1270,28 +1317,25 @@ impl CoolCooler {
 
         // -- Dialog views (replace main content when open) --
         if self.show_save_dialog {
-            return container(
-                card(
-                    column![
-                        text("Save Preset").size(22).color(c.text_primary),
-                        text_input("Preset name...", &self.save_name_input)
-                            .on_input(Message::SaveNameChanged)
-                            .on_submit(Message::SavePreset)
-                            .size(14)
-                            .padding(10),
-                        row![
-                            styled_button("Save", ButtonKind::Default, c)
-                                .on_press(Message::SavePreset),
-                            styled_button("Cancel", ButtonKind::Danger, c)
-                                .on_press(Message::CloseSaveDialog),
-                        ]
-                        .spacing(8),
+            return container(card(
+                column![
+                    text("Save Preset").size(22).color(c.text_primary),
+                    text_input("Preset name...", &self.save_name_input)
+                        .on_input(Message::SaveNameChanged)
+                        .on_submit(Message::SavePreset)
+                        .size(14)
+                        .padding(10),
+                    row![
+                        styled_button("Save", ButtonKind::Default, c).on_press(Message::SavePreset),
+                        styled_button("Cancel", ButtonKind::Danger, c)
+                            .on_press(Message::CloseSaveDialog),
                     ]
-                    .spacing(16)
-                    .width(350),
-                    c,
-                ),
-            )
+                    .spacing(8),
+                ]
+                .spacing(16)
+                .width(350),
+                c,
+            ))
             .width(Length::Fill)
             .height(Length::Fill)
             .center_x(Length::Shrink)
@@ -1321,19 +1365,15 @@ impl CoolCooler {
                     let folder_del = entry.folder.clone();
 
                     let preview_el: Element<Message> = if let Some(ref handle) = entry.preview {
-                        container(
-                            iced::widget::image(handle.clone())
-                                .width(120)
-                                .height(120),
-                        )
-                        .style(|_: &Theme| container::Style {
-                            border: Border {
-                                radius: 8.0.into(),
+                        container(iced::widget::image(handle.clone()).width(120).height(120))
+                            .style(|_: &Theme| container::Style {
+                                border: Border {
+                                    radius: 8.0.into(),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
-                            },
-                            ..Default::default()
-                        })
-                        .into()
+                            })
+                            .into()
                     } else {
                         container(text("No preview").size(10).color(c.text_dim))
                             .width(120)
@@ -1394,7 +1434,7 @@ impl CoolCooler {
                         grid_row = row![].spacing(12);
                     }
                 }
-                if self.preset_list.len() % 4 != 0 {
+                if !self.preset_list.len().is_multiple_of(4) {
                     preset_grid = preset_grid.push(grid_row);
                 }
             }
@@ -1451,23 +1491,17 @@ impl CoolCooler {
         subs.push(window::close_events().map(Message::WindowClosed));
 
         // Poll tray icon events (250ms is responsive enough for a click-to-show)
-        subs.push(
-            iced::time::every(Duration::from_millis(250)).map(|_| Message::TrayPoll),
-        );
+        subs.push(iced::time::every(Duration::from_millis(250)).map(|_| Message::TrayPoll));
 
         // 30ms tick for GIF animation
         if self.is_animated() {
-            subs.push(
-                iced::time::every(Duration::from_millis(30)).map(|_| Message::AnimationTick),
-            );
+            subs.push(iced::time::every(Duration::from_millis(30)).map(|_| Message::AnimationTick));
         }
 
         // 1s tick for dynamic widgets (clock, date, sysinfo)
         let has_dynamic = self.canvas.layers.iter().any(|l| l.widget.is_dynamic());
         if has_dynamic {
-            subs.push(
-                iced::time::every(Duration::from_secs(1)).map(|_| Message::WidgetTick),
-            );
+            subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::WidgetTick));
         }
 
         Subscription::batch(subs)
@@ -1504,7 +1538,11 @@ enum ButtonKind {
     Disabled,
 }
 
-fn styled_button<'a>(label: &'a str, kind: ButtonKind, c: &AppColors) -> button::Button<'a, Message> {
+fn styled_button<'a>(
+    label: &'a str,
+    kind: ButtonKind,
+    c: &AppColors,
+) -> button::Button<'a, Message> {
     let (bg, text_color) = match kind {
         ButtonKind::Default => (c.surface, c.text_primary),
         ButtonKind::Danger => (c.danger_bg, c.red),
@@ -1545,7 +1583,9 @@ fn render_base_rgba(
 
         let x0 = (cx - vis / 2.0).max(0.0) as u32;
         let y0 = (cy - vis / 2.0).max(0.0) as u32;
-        let side = (vis as u32).min(source.width() - x0).min(source.height() - y0);
+        let side = (vis as u32)
+            .min(source.width() - x0)
+            .min(source.height() - y0);
 
         let cropped = imageops::crop_imm(source, x0, y0, side, side).to_image();
         resize_rgba(&cropped, res.width, res.height)
@@ -1678,7 +1718,7 @@ fn circular_preview_from_rgba(mut rgba: RgbaImage) -> iced::widget::image::Handl
 
 fn app_window_settings() -> window::Settings {
     let icon = window::icon::from_file_data(
-        include_bytes!("../../../assets/tray_icon.png"),
+        include_bytes!("../../../assets/icon.png"),
         Some(image::ImageFormat::Png),
     )
     .ok();
@@ -1694,61 +1734,10 @@ fn app_window_settings() -> window::Settings {
     }
 }
 
-// -- Device --
-
-fn detect_device() -> (bool, DeviceInfo) {
-    let mut lcd = Fx360::new();
-    let info = lcd.info().clone();
-    let connected = lcd.connect().is_ok();
-    if connected {
-        lcd.disconnect();
-    }
-    (connected, info)
-}
-
 async fn pick_file() -> Option<PathBuf> {
     rfd::AsyncFileDialog::new()
         .add_filter("Images", &["png", "jpg", "jpeg", "bmp", "gif", "webp"])
         .pick_file()
         .await
         .map(|h| h.path().to_path_buf())
-}
-
-/// Device display loop. Reads the latest JPEG from the shared buffer
-/// and sends it to the device at the target frame rate.
-/// The UI thread pushes updated JPEGs when content changes.
-fn run_display(shared_frame: Arc<Mutex<Vec<u8>>>, stop: &AtomicBool) {
-    let mut lcd = Fx360::new();
-    if lcd.connect().is_err() {
-        return;
-    }
-
-    let device_interval = Duration::from_secs_f64(1.0 / lcd.info().target_fps);
-    let keepalive_interval = lcd.info().keepalive_interval;
-    let mut last_keepalive = Instant::now();
-    let mut current_jpeg = Vec::new();
-
-    while !stop.load(Ordering::Relaxed) {
-        // Pick up latest frame from UI thread
-        if let Ok(frame) = shared_frame.lock() {
-            if !frame.is_empty() && *frame != current_jpeg {
-                current_jpeg = frame.clone();
-            }
-        }
-
-        if !current_jpeg.is_empty() {
-            if lcd.send_frame(&current_jpeg).is_err() {
-                return;
-            }
-        }
-
-        if last_keepalive.elapsed() >= keepalive_interval {
-            if lcd.send_keepalive().is_err() {
-                return;
-            }
-            last_keepalive = Instant::now();
-        }
-
-        std::thread::sleep(device_interval);
-    }
 }

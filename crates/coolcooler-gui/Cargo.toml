@@ -9,7 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 coolcooler-core = { path = "../coolcooler-core" }
-coolcooler-idcooling = { path = "../coolcooler-idcooling" }
+coolcooler-driver = { path = "../coolcooler-driver" }
 iced = { version = "0.14", features = ["image", "tokio"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "bmp", "gif", "webp"] }
 fast_image_resize = "5"

@@ -853,7 +853,8 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "coolcooler-core",
- "coolcooler-idcooling",
+ "coolcooler-driver",
+ "coolcooler-liquidctl",
  "ctrlc",
  "image",
 ]
@@ -868,13 +869,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "coolcooler-driver"
+version = "0.1.0"
+dependencies = [
+ "coolcooler-core",
+ "coolcooler-idcooling",
+ "coolcooler-liquidctl",
+ "hidapi",
+]
+
+[[package]]
 name = "coolcooler-gui"
 version = "0.1.0"
 dependencies = [
  "ab_glyph",
  "chrono",
  "coolcooler-core",
- "coolcooler-idcooling",
+ "coolcooler-driver",
  "fast_image_resize",
  "iced",
  "image",
@@ -894,6 +905,13 @@ version = "0.1.0"
 dependencies = [
  "coolcooler-core",
  "hidapi",
+]
+
+[[package]]
+name = "coolcooler-liquidctl"
+version = "0.1.0"
+dependencies = [
+ "coolcooler-core",
 ]
 
 [[package]]

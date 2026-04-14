@@ -54,7 +54,10 @@ pub fn build_connect_packet() -> [u8; PACKET_SIZE] {
 /// - Continuation packets: up to 1024 bytes of JPEG data (zero-padded if final)
 pub fn build_frame_packets(jpeg_data: &[u8]) -> Vec<[u8; PACKET_SIZE]> {
     let header = build_draw_header(jpeg_data.len());
-    let continuation_count = jpeg_data.len().saturating_sub(JPEG_FIRST_CHUNK).div_ceil(PACKET_SIZE);
+    let continuation_count = jpeg_data
+        .len()
+        .saturating_sub(JPEG_FIRST_CHUNK)
+        .div_ceil(PACKET_SIZE);
     let mut packets = Vec::with_capacity(1 + continuation_count);
 
     // First packet: header + first chunk of JPEG

@@ -1,17 +1,17 @@
 use nvml_wrapper::Nvml;
-use sysinfo::{Components, System};
 use std::time::Instant;
+use sysinfo::{Components, System};
 
 /// Shared system info readings, refreshed once per tick cycle.
 #[derive(Debug, Default, Clone)]
 pub struct SysInfoData {
-    pub cpu_usage: f32,          // 0-100%
-    pub cpu_temp: Option<f32>,   // °C
+    pub cpu_usage: f32,        // 0-100%
+    pub cpu_temp: Option<f32>, // °C
     pub ram_used_gb: f32,
     pub ram_total_gb: f32,
-    pub ram_percent: f32,        // 0-100%
-    pub gpu_temp: Option<f32>,   // °C
-    pub gpu_usage: Option<f32>,  // 0-100%
+    pub ram_percent: f32,       // 0-100%
+    pub gpu_temp: Option<f32>,  // °C
+    pub gpu_usage: Option<f32>, // 0-100%
 }
 
 /// Backend that owns the sysinfo::System and refreshes on demand.
@@ -59,16 +59,21 @@ impl SysInfoBackend {
         // CPU usage (average across all cores)
         let cpus = self.system.cpus();
         if !cpus.is_empty() {
-            self.data.cpu_usage = cpus.iter().map(|c| c.cpu_usage()).sum::<f32>() / cpus.len() as f32;
+            self.data.cpu_usage =
+                cpus.iter().map(|c| c.cpu_usage()).sum::<f32>() / cpus.len() as f32;
         }
 
         // CPU temp — look for coretemp, k10temp, or generic CPU sensor
         self.data.cpu_temp = None;
         for comp in self.components.iter() {
             let label = comp.label().to_lowercase();
-            if label.contains("core") || label.contains("tctl") || label.contains("cpu") || label.contains("package") {
+            if label.contains("core")
+                || label.contains("tctl")
+                || label.contains("cpu")
+                || label.contains("package")
+            {
                 if let Some(temp) = comp.temperature() {
-                    if self.data.cpu_temp.map_or(true, |t| temp > t) {
+                    if self.data.cpu_temp.is_none_or(|t| temp > t) {
                         self.data.cpu_temp = Some(temp);
                     }
                 }
@@ -81,7 +86,7 @@ impl SysInfoBackend {
             let label = comp.label().to_lowercase();
             if label.contains("gpu") || label.contains("edge") || label.contains("junction") {
                 if let Some(temp) = comp.temperature() {
-                    if self.data.gpu_temp.map_or(true, |t| temp > t) {
+                    if self.data.gpu_temp.is_none_or(|t| temp > t) {
                         self.data.gpu_temp = Some(temp);
                     }
                 }
@@ -92,7 +97,9 @@ impl SysInfoBackend {
         if let Some(ref nvml) = self.nvml {
             if let Ok(device) = nvml.device_by_index(0) {
                 if self.data.gpu_temp.is_none() {
-                    if let Ok(temp) = device.temperature(nvml_wrapper::enum_wrappers::device::TemperatureSensor::Gpu) {
+                    if let Ok(temp) = device
+                        .temperature(nvml_wrapper::enum_wrappers::device::TemperatureSensor::Gpu)
+                    {
                         self.data.gpu_temp = Some(temp as f32);
                     }
                 }
@@ -107,7 +114,11 @@ impl SysInfoBackend {
         let used = self.system.used_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
         self.data.ram_total_gb = total as f32;
         self.data.ram_used_gb = used as f32;
-        self.data.ram_percent = if total > 0.0 { (used / total * 100.0) as f32 } else { 0.0 };
+        self.data.ram_percent = if total > 0.0 {
+            (used / total * 100.0) as f32
+        } else {
+            0.0
+        };
 
         self.last_refresh = Instant::now();
 

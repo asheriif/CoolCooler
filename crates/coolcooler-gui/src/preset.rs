@@ -5,6 +5,8 @@ use image::{codecs::png::PngEncoder, ImageEncoder, RgbaImage};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+const APP_DIR_NAME: &str = "coolcooler";
+
 /// On-disk preset data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PresetData {
@@ -45,8 +47,35 @@ pub struct PresetEntry {
 }
 
 /// Root directory for all presets.
-fn presets_dir() -> PathBuf {
-    PathBuf::from("presets")
+pub fn presets_dir() -> PathBuf {
+    data_dir().join("presets")
+}
+
+/// Path to a file inside a saved preset folder.
+pub fn preset_file_path(folder: &str, file: &str) -> PathBuf {
+    presets_dir().join(folder).join(file)
+}
+
+fn data_dir() -> PathBuf {
+    if let Some(path) = env_path("XDG_DATA_HOME") {
+        return path.join(APP_DIR_NAME);
+    }
+
+    if let Some(home) = env_path("HOME") {
+        return home.join(".local").join("share").join(APP_DIR_NAME);
+    }
+
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(APP_DIR_NAME)
+}
+
+fn env_path(name: &str) -> Option<PathBuf> {
+    let value = std::env::var_os(name)?;
+    if value.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(value))
 }
 
 /// Sanitize a display name to a safe folder name.
@@ -96,19 +125,17 @@ pub fn save(
     let dir = presets_dir();
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create presets dir: {e}"))?;
 
-    let folder_name = folder_override
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            let base = sanitize_folder_name(name);
-            // Ensure unique folder name
-            let mut candidate = base.clone();
-            let mut n = 1;
-            while dir.join(&candidate).exists() {
-                n += 1;
-                candidate = format!("{base}-{n}");
-            }
-            candidate
-        });
+    let folder_name = folder_override.map(|s| s.to_string()).unwrap_or_else(|| {
+        let base = sanitize_folder_name(name);
+        // Ensure unique folder name
+        let mut candidate = base.clone();
+        let mut n = 1;
+        while dir.join(&candidate).exists() {
+            n += 1;
+            candidate = format!("{base}-{n}");
+        }
+        candidate
+    });
 
     let preset_dir = dir.join(&folder_name);
     fs::create_dir_all(&preset_dir).map_err(|e| format!("Failed to create preset dir: {e}"))?;
@@ -116,10 +143,7 @@ pub fn save(
     // Copy background image (skip if source doesn't exist or is the same file)
     if let Some(src) = source_image_path {
         if src.exists() {
-            let ext = src
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("png");
+            let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("png");
             let dest = preset_dir.join(format!("background.{ext}"));
             let same_file = src
                 .canonicalize()
@@ -146,7 +170,8 @@ pub fn save(
 
     // Save config JSON
     let config_path = preset_dir.join("preset.json");
-    let json = serde_json::to_string_pretty(data).map_err(|e| format!("Failed to serialize: {e}"))?;
+    let json =
+        serde_json::to_string_pretty(data).map_err(|e| format!("Failed to serialize: {e}"))?;
     fs::write(&config_path, json).map_err(|e| format!("Failed to write config: {e}"))?;
 
     Ok(folder_name)
@@ -205,8 +230,8 @@ pub fn load(folder: &str) -> Result<(PresetData, Option<PathBuf>), String> {
     let preset_dir = presets_dir().join(folder);
     let config_path = preset_dir.join("preset.json");
 
-    let json = fs::read_to_string(&config_path)
-        .map_err(|e| format!("Failed to read preset: {e}"))?;
+    let json =
+        fs::read_to_string(&config_path).map_err(|e| format!("Failed to read preset: {e}"))?;
     let data: PresetData =
         serde_json::from_str(&json).map_err(|e| format!("Failed to parse preset: {e}"))?;
 

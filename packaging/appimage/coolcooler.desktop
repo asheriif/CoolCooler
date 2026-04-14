@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=CoolCooler
+Comment=Control LCD screens on AIO liquid coolers
+Exec=coolcooler-gui
+Icon=coolcooler
+Categories=Settings;HardwareSettings;
+Terminal=false
+StartupNotify=false
+StartupWMClass=coolcooler
+X-AppImage-Name=CoolCooler
+X-AppImage-Version=0.1.0
