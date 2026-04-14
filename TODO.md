@@ -22,9 +22,13 @@
 - [ ] Device discovery / selection UI
 
 ## Packaging
-- [ ] AppImage / Flatpak build
+- [x] AppImage build
+- [ ] Flatpak build
 - [ ] Windows build + installer
 - [ ] udev rule auto-install
+- [ ] Add AppStream metadata (`usr/share/metainfo/...xml`) with app summary, license, screenshots, categories, launchable desktop ID, and release notes once project URL/license/release flow are settled.
+- [ ] Improve release versioning: derive AppImage filenames from release tags (`git describe --tags --dirty --always`) while keeping Cargo package version as a local fallback.
+- [ ] Add an optional install helper for AppImage users: install/update `~/.local/bin/coolcooler.AppImage`, `~/.local/share/applications/coolcooler.desktop`, the hicolor app icon, refresh desktop caches, and optionally install udev rules via `sudo`.
 
 ## Widgets
 - [ ] Controllable transparency per widget

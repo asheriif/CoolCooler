@@ -24,7 +24,10 @@ pub fn detect_device() -> Option<DisplayDriver> {
 
 /// Match a VID/PID pair against the liquidctl device registry.
 /// Returns the first matching device definition, or `None`.
-pub fn match_liquidctl_device(vendor_id: u16, product_id: u16) -> Option<&'static LiquidctlDeviceDef> {
+pub fn match_liquidctl_device(
+    vendor_id: u16,
+    product_id: u16,
+) -> Option<&'static LiquidctlDeviceDef> {
     DEVICE_REGISTRY
         .iter()
         .find(|def| def.vendor_id == vendor_id && def.product_id == product_id)

@@ -1,5 +1,7 @@
 use std::sync::mpsc;
 
+const APP_ICON_NAME: &str = "coolcooler";
+
 /// Messages sent from the tray icon to the iced app.
 pub enum TrayEvent {
     ShowWindow,
@@ -37,12 +39,25 @@ impl ksni::Tray for CoolCoolerTray {
         "CoolCooler".to_string()
     }
 
+    fn category(&self) -> ksni::Category {
+        ksni::Category::Hardware
+    }
+
+    fn icon_name(&self) -> String {
+        APP_ICON_NAME.to_string()
+    }
+
+    fn icon_theme_path(&self) -> String {
+        appimage_icon_theme_path().unwrap_or_default()
+    }
+
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
         vec![load_icon()]
     }
 
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip {
+            icon_name: APP_ICON_NAME.to_string(),
             title: "CoolCooler".to_string(),
             ..Default::default()
         }
@@ -51,6 +66,13 @@ impl ksni::Tray for CoolCoolerTray {
     fn activate(&mut self, _x: i32, _y: i32) {
         let _ = self.tx.send(TrayEvent::ShowWindow);
     }
+}
+
+#[cfg(target_os = "linux")]
+fn appimage_icon_theme_path() -> Option<String> {
+    let appdir = std::env::var_os("APPDIR")?;
+    let path = std::path::PathBuf::from(appdir).join("usr/share/icons");
+    Some(path.to_string_lossy().into_owned())
 }
 
 #[cfg(target_os = "linux")]
@@ -67,7 +89,11 @@ fn load_icon() -> ksni::Icon {
         argb.push(pixel[1]); // G
         argb.push(pixel[2]); // B
     }
-    ksni::Icon { width: w, height: h, data: argb }
+    ksni::Icon {
+        width: w,
+        height: h,
+        data: argb,
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -91,7 +117,7 @@ pub struct WindowsTrayHandle {
 
 #[cfg(target_os = "windows")]
 fn platform_spawn(tx: mpsc::Sender<TrayEvent>) -> WindowsTrayHandle {
-    use tray_icon::{TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState};
+    use tray_icon::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
     let join = std::thread::spawn(move || {
         let _tray = TrayIconBuilder::new()

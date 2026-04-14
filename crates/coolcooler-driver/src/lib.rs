@@ -186,7 +186,10 @@ mod tests {
             DisplayCapability::FileTransfer,
             DisplayCapability::FileTransfer
         );
-        assert_ne!(DisplayCapability::Streaming, DisplayCapability::FileTransfer);
+        assert_ne!(
+            DisplayCapability::Streaming,
+            DisplayCapability::FileTransfer
+        );
     }
 
     // -- widgets_allowed tests --

@@ -12,7 +12,11 @@ use crate::DisplayDriver;
 /// For liquidctl (file-transfer) devices, the shared buffer carries PNG bytes.
 ///
 /// This function blocks until `stop` is set to `true`.
-pub fn run_display(mut driver: DisplayDriver, shared_frame: Arc<Mutex<Vec<u8>>>, stop: &AtomicBool) {
+pub fn run_display(
+    mut driver: DisplayDriver,
+    shared_frame: Arc<Mutex<Vec<u8>>>,
+    stop: &AtomicBool,
+) {
     match &mut driver {
         DisplayDriver::Native(lcd) => streaming_loop(lcd, shared_frame, stop),
         DisplayDriver::Liquidctl(lc) => file_transfer_loop(lc, shared_frame, stop),
@@ -26,11 +30,7 @@ const RECONNECT_DELAY: Duration = Duration::from_secs(2);
 ///
 /// On USB errors (e.g. after system suspend/resume), the loop disconnects,
 /// waits, and attempts to reconnect rather than silently dying.
-fn streaming_loop(
-    lcd: &mut impl CoolerLcd,
-    shared_frame: Arc<Mutex<Vec<u8>>>,
-    stop: &AtomicBool,
-) {
+fn streaming_loop(lcd: &mut impl CoolerLcd, shared_frame: Arc<Mutex<Vec<u8>>>, stop: &AtomicBool) {
     if lcd.connect().is_err() {
         return;
     }

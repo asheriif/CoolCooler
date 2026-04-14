@@ -1,8 +1,8 @@
-use std::borrow::Cow;
 use fast_image_resize as fir;
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops;
 use image::{DynamicImage, ImageEncoder, RgbImage};
+use std::borrow::Cow;
 
 use crate::{DeviceInfo, Error, Resolution, Result, Rotation};
 
@@ -39,19 +39,19 @@ pub fn crop_and_resize(img: &DynamicImage, resolution: Resolution) -> RgbImage {
         return rgb;
     }
 
-    let src_image = fir::images::Image::from_vec_u8(cw, ch, rgb.into_raw(), fir::PixelType::U8x3)
-        .unwrap();
+    let src_image =
+        fir::images::Image::from_vec_u8(cw, ch, rgb.into_raw(), fir::PixelType::U8x3).unwrap();
 
-    let mut dst_image = fir::images::Image::new(resolution.width, resolution.height, fir::PixelType::U8x3);
+    let mut dst_image =
+        fir::images::Image::new(resolution.width, resolution.height, fir::PixelType::U8x3);
 
     let mut resizer = fir::Resizer::new();
     resizer
         .resize(
             &src_image,
             &mut dst_image,
-            &fir::ResizeOptions::new().resize_alg(fir::ResizeAlg::Convolution(
-                fir::FilterType::CatmullRom,
-            )),
+            &fir::ResizeOptions::new()
+                .resize_alg(fir::ResizeAlg::Convolution(fir::FilterType::CatmullRom)),
         )
         .unwrap();
 

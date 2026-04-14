@@ -15,17 +15,9 @@ fn all_registry_commands_are_well_formed() {
             def.name
         );
         // Must contain "lcd" as channel
-        assert_eq!(
-            args[1], "lcd",
-            "{}: channel should be 'lcd'",
-            def.name
-        );
+        assert_eq!(args[1], "lcd", "{}: channel should be 'lcd'", def.name);
         // Must contain "screen" as target
-        assert_eq!(
-            args[2], "screen",
-            "{}: target should be 'screen'",
-            def.name
-        );
+        assert_eq!(args[2], "screen", "{}: target should be 'screen'", def.name);
         // Path placeholder must have been substituted
         for arg in &args {
             assert!(
@@ -40,8 +32,7 @@ fn all_registry_commands_are_well_formed() {
         assert!(
             has_path,
             "{}: image path must appear in args: {:?}",
-            def.name,
-            args
+            def.name, args
         );
     }
 }

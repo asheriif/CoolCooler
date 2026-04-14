@@ -77,11 +77,7 @@ fn parse_color(s: &str) -> Result<Rgb<u8>, String> {
 /// Streaming display loop for native devices. Sends the same JPEG at target FPS.
 /// Takes ownership of the driver (it's moved into the display thread).
 /// Blocks until `running` is set to false (Ctrl+C).
-fn streaming_display_loop(
-    driver: DisplayDriver,
-    jpeg: Vec<u8>,
-    running: &AtomicBool,
-) {
+fn streaming_display_loop(driver: DisplayDriver, jpeg: Vec<u8>, running: &AtomicBool) {
     let shared = Arc::new(Mutex::new(jpeg));
     let stop = Arc::new(AtomicBool::new(false));
     let stop_clone = stop.clone();
@@ -97,7 +93,10 @@ fn streaming_display_loop(
 }
 
 /// Single-shot send for file-transfer (liquidctl) devices.
-fn file_transfer_send(lc: &coolcooler_liquidctl::LiquidctlDriver, img: &DynamicImage) -> Result<(), Box<dyn std::error::Error>> {
+fn file_transfer_send(
+    lc: &coolcooler_liquidctl::LiquidctlDriver,
+    img: &DynamicImage,
+) -> Result<(), Box<dyn std::error::Error>> {
     let temp_path = lc.temp_file_path().to_path_buf();
     img.save(&temp_path)?;
     lc.send_image(&temp_path)?;
@@ -108,8 +107,7 @@ fn file_transfer_send(lc: &coolcooler_liquidctl::LiquidctlDriver, img: &DynamicI
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
-    let mut driver = coolcooler_driver::detect_device()
-        .ok_or("No supported cooler detected")?;
+    let mut driver = coolcooler_driver::detect_device().ok_or("No supported cooler detected")?;
 
     println!("Detected: {}", driver.info().name);
     driver.connect()?;
@@ -126,10 +124,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Command::Test => {
-            println!("Device is responding ({}).", match capability {
-                DisplayCapability::Streaming => "native streaming",
-                DisplayCapability::FileTransfer => "liquidctl file-transfer",
-            });
+            println!(
+                "Device is responding ({}).",
+                match capability {
+                    DisplayCapability::Streaming => "native streaming",
+                    DisplayCapability::FileTransfer => "liquidctl file-transfer",
+                }
+            );
             driver.disconnect();
         }
         Command::Image { path, quality } => {
@@ -137,7 +138,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match capability {
                 DisplayCapability::Streaming => {
                     let jpeg = frame::prepare(&img, driver.info(), quality)?;
-                    println!("Displaying {path} ({} bytes JPEG, Ctrl+C to stop)", jpeg.len());
+                    println!(
+                        "Displaying {path} ({} bytes JPEG, Ctrl+C to stop)",
+                        jpeg.len()
+                    );
                     streaming_display_loop(driver, jpeg, &running);
                     // driver moved into thread — disconnect happens on thread exit
                 }

@@ -61,15 +61,14 @@ impl CoolerLcd for Fx360 {
     }
 
     fn connect(&mut self) -> Result<()> {
-        let api = hidapi::HidApi::new()
-            .map_err(|e| Error::Connection(format!("HID init: {e}")))?;
+        let api = hidapi::HidApi::new().map_err(|e| Error::Connection(format!("HID init: {e}")))?;
 
-        let device = api.open(VENDOR_ID, PRODUCT_ID).map_err(|_| {
-            Error::DeviceNotFound {
+        let device = api
+            .open(VENDOR_ID, PRODUCT_ID)
+            .map_err(|_| Error::DeviceNotFound {
                 vendor_id: VENDOR_ID,
                 product_id: PRODUCT_ID,
-            }
-        })?;
+            })?;
 
         self.device = Some(device);
         Ok(())
