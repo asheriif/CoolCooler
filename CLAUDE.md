@@ -61,13 +61,13 @@ Rust workspace with modular crates:
 
 ## Build & Run
 
-Must build AND run inside distrobox (host is Bazzite, immutable — glibc mismatch prevents host execution):
+Build and run inside distrobox to keep the host clean:
 
 ```bash
-distrobox enter Fedora45 -- cargo build
-distrobox enter Fedora45 -- cargo test
-distrobox enter Fedora45 -- ./target/debug/coolcooler test
-distrobox enter Fedora45 -- ./target/debug/coolcooler-gui
+distrobox enter IsolatedArch -- cargo build
+distrobox enter IsolatedArch -- cargo test
+distrobox enter IsolatedArch -- ./target/debug/coolcooler test
+distrobox enter IsolatedArch -- ./target/debug/coolcooler-gui
 ```
 
 ## Key Technical Decisions

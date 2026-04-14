@@ -9,7 +9,8 @@ path = "src/main.rs"
 
 [dependencies]
 coolcooler-core = { path = "../coolcooler-core" }
-coolcooler-idcooling = { path = "../coolcooler-idcooling" }
+coolcooler-driver = { path = "../coolcooler-driver" }
+coolcooler-liquidctl = { path = "../coolcooler-liquidctl" }
 clap = { version = "4", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "bmp", "webp"] }
 ctrlc = "3"

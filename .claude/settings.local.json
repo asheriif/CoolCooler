@@ -70,7 +70,28 @@
       "Bash(curl -s \"https://raw.githubusercontent.com/tauri-apps/tray-icon/dev/src/platform_impl/gtk/mod.rs\")",
       "Bash(curl -s \"https://raw.githubusercontent.com/tauri-apps/tray-icon/dev/examples/winit.rs\")",
       "Bash(curl -s \"https://crates.io/api/v1/crates/tray\")",
-      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\)['crate']; print\\(f\\\\\"Name: {d['name']}\\\\nVersion: {d['max_version']}\\\\nUpdated: {d['updated_at']}\\\\nDescription: {d.get\\('description',''\\)}\\\\nRepository: {d.get\\('repository',''\\)}\\\\\"\\)\")"
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\)['crate']; print\\(f\\\\\"Name: {d['name']}\\\\nVersion: {d['max_version']}\\\\nUpdated: {d['updated_at']}\\\\nDescription: {d.get\\('description',''\\)}\\\\nRepository: {d.get\\('repository',''\\)}\\\\\"\\)\")",
+      "Read(//home/asheriif/.cargo/registry/**)",
+      "Read(//home/asheriif/**)",
+      "Bash(distrobox list:*)",
+      "Read(//usr/share/icons/breeze/apps/22/**)",
+      "Bash(python3 /tmp/gen_icons.py)",
+      "Bash(ls ~/.local/share/icons/hicolor/*/apps/coolcooler.png)",
+      "Bash(curl -s \"https://api.duckduckgo.com/?q=winit+wayland+set_window_icon+ignored&format=json&no_html=1\")",
+      "WebFetch(domain:wayland.app)",
+      "WebFetch(domain:nicolasfella.de)",
+      "Bash(find /home/asheriif/code/CoolCooler/investigation/coolercontrol -type f -name \"*.rs\" -exec grep -l \"apply_setting_lcd\\\\|apply_setting\" {} \\\\;)",
+      "Bash(grep -r \"LcdMode\\\\|LcdInfo\" /home/asheriif/code/CoolCooler/investigation/coolercontrol/coolercontrold/daemon/src/repositories/liquidctl/supported_devices/*.rs)",
+      "Bash(grep -E \"\\\\.\\(rs|py|toml\\)$\")",
+      "Bash(grep -l \"lcd_resolution\\\\|LcdInfo\\\\|LcdMode\" /home/asheriif/code/CoolCooler/investigation/coolercontrol/coolercontrold/daemon/src/repositories/liquidctl/supported_devices/*.rs)",
+      "Bash(grep -r \"0x3d\\\\|0x40\\\\|0x41\\\\|endpoint\\\\|USB\\\\|packet\\\\|protocol\" /home/asheriif/code/CoolCooler/investigation/coolercontrol/coolercontrold/daemon/src/repositories/liquidctl/supported_devices/*.rs)",
+      "Bash(find /home/asheriif/code/CoolCooler/investigation -type f \\\\\\( -name \"*.md\" -o -name \"*.txt\" \\\\\\) -exec grep -l \"ASUS.*LCD\\\\|Ryujin.*LCD\\\\|Ryuo.*LCD\" {} \\\\;)",
+      "Bash(python3 -m liquidctl --help)",
+      "Bash(python3 -m liquidctl set --help)",
+      "Bash(ls /home/asheriif/code/CoolCooler/investigation/liquidctl/tests/*kraken*)"
+    ],
+    "additionalDirectories": [
+      "/tmp"
     ]
   }
 }

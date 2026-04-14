@@ -1,15 +1,13 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Instant;
+use std::sync::{Arc, Mutex};
 
 use clap::{Parser, Subcommand};
 use coolcooler_core::frame::{self, DEFAULT_JPEG_QUALITY};
-use coolcooler_core::CoolerLcd;
-use coolcooler_idcooling::Fx360;
+use coolcooler_driver::{DisplayCapability, DisplayDriver};
 use image::{DynamicImage, Rgb, RgbImage};
 
 #[derive(Parser)]
-#[command(name = "coolcooler", about = "ID-Cooling FX360 LCD test CLI")]
+#[command(name = "coolcooler", about = "AIO cooler LCD test CLI")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -17,7 +15,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Test USB connection (send a keepalive)
+    /// Test connection (send a keepalive or verify liquidctl)
     Test,
     /// Display a static image
     Image {
@@ -76,43 +74,45 @@ fn parse_color(s: &str) -> Result<Rgb<u8>, String> {
     }
 }
 
-fn display_loop(lcd: &mut Fx360, jpeg: &[u8], running: &AtomicBool) {
-    let info = lcd.info().clone();
-    let frame_interval = std::time::Duration::from_secs_f64(1.0 / info.target_fps);
-    let mut last_keepalive = Instant::now();
-    let mut frames = 0u64;
-    let start = Instant::now();
+/// Streaming display loop for native devices. Sends the same JPEG at target FPS.
+/// Takes ownership of the driver (it's moved into the display thread).
+/// Blocks until `running` is set to false (Ctrl+C).
+fn streaming_display_loop(
+    driver: DisplayDriver,
+    jpeg: Vec<u8>,
+    running: &AtomicBool,
+) {
+    let shared = Arc::new(Mutex::new(jpeg));
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_clone = stop.clone();
+
+    std::thread::spawn(move || {
+        coolcooler_driver::run_display(driver, shared, &stop_clone);
+    });
 
     while running.load(Ordering::Relaxed) {
-        if let Err(e) = lcd.send_frame(jpeg) {
-            eprintln!("send error: {e}");
-            break;
-        }
-        frames += 1;
-
-        if last_keepalive.elapsed() >= info.keepalive_interval {
-            if let Err(e) = lcd.send_keepalive() {
-                eprintln!("keepalive error: {e}");
-                break;
-            }
-            last_keepalive = Instant::now();
-        }
-
-        std::thread::sleep(frame_interval);
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
+    stop.store(true, Ordering::Relaxed);
+}
 
-    let elapsed = start.elapsed().as_secs_f64();
-    if elapsed > 0.0 {
-        eprintln!("{frames} frames in {elapsed:.1}s ({:.1} FPS)", frames as f64 / elapsed);
-    }
+/// Single-shot send for file-transfer (liquidctl) devices.
+fn file_transfer_send(lc: &coolcooler_liquidctl::LiquidctlDriver, img: &DynamicImage) -> Result<(), Box<dyn std::error::Error>> {
+    let temp_path = lc.temp_file_path().to_path_buf();
+    img.save(&temp_path)?;
+    lc.send_image(&temp_path)?;
+    println!("Image sent to device.");
+    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
-    let mut lcd = Fx360::new();
-    println!("Connecting to {}...", lcd.info().name);
-    lcd.connect()?;
+    let mut driver = coolcooler_driver::detect_device()
+        .ok_or("No supported cooler detected")?;
+
+    println!("Detected: {}", driver.info().name);
+    driver.connect()?;
     println!("Connected.");
 
     let running = Arc::new(AtomicBool::new(true));
@@ -122,27 +122,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         r.store(false, Ordering::Relaxed);
     })?;
 
+    let capability = driver.capability();
+
     match cli.command {
         Command::Test => {
-            lcd.send_keepalive()?;
-            println!("Keepalive sent. Device is responding.");
+            println!("Device is responding ({}).", match capability {
+                DisplayCapability::Streaming => "native streaming",
+                DisplayCapability::FileTransfer => "liquidctl file-transfer",
+            });
+            driver.disconnect();
         }
         Command::Image { path, quality } => {
             let img = image::open(&path)?;
-            let jpeg = frame::prepare(&img, lcd.info(), quality)?;
-            println!("Displaying {path} ({} bytes JPEG, Ctrl+C to stop)", jpeg.len());
-            display_loop(&mut lcd, &jpeg, &running);
+            match capability {
+                DisplayCapability::Streaming => {
+                    let jpeg = frame::prepare(&img, driver.info(), quality)?;
+                    println!("Displaying {path} ({} bytes JPEG, Ctrl+C to stop)", jpeg.len());
+                    streaming_display_loop(driver, jpeg, &running);
+                    // driver moved into thread — disconnect happens on thread exit
+                }
+                DisplayCapability::FileTransfer => {
+                    if let DisplayDriver::Liquidctl(ref lc) = driver {
+                        file_transfer_send(lc, &img)?;
+                    }
+                    driver.disconnect();
+                }
+            }
         }
         Command::Color { color } => {
             let rgb = parse_color(&color)?;
-            let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(240, 240, rgb));
-            let jpeg = frame::prepare(&img, lcd.info(), DEFAULT_JPEG_QUALITY)?;
-            println!("Displaying color {color} (Ctrl+C to stop)");
-            display_loop(&mut lcd, &jpeg, &running);
+            let res = driver.info().resolution;
+            let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(res.width, res.height, rgb));
+            match capability {
+                DisplayCapability::Streaming => {
+                    let jpeg = frame::prepare(&img, driver.info(), DEFAULT_JPEG_QUALITY)?;
+                    println!("Displaying color {color} (Ctrl+C to stop)");
+                    streaming_display_loop(driver, jpeg, &running);
+                }
+                DisplayCapability::FileTransfer => {
+                    if let DisplayDriver::Liquidctl(ref lc) = driver {
+                        file_transfer_send(lc, &img)?;
+                    }
+                    driver.disconnect();
+                }
+            }
         }
     }
 
-    lcd.disconnect();
-    println!("Disconnected.");
+    println!("Done.");
     Ok(())
 }

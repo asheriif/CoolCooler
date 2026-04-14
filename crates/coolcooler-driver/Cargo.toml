@@ -1,0 +1,15 @@
+[package]
+name = "coolcooler-driver"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+coolcooler-core = { path = "../coolcooler-core" }
+coolcooler-idcooling = { path = "../coolcooler-idcooling" }
+coolcooler-liquidctl = { path = "../coolcooler-liquidctl" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+hidapi = { version = "2", default-features = false, features = ["linux-static-libusb"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+hidapi = { version = "2", default-features = false }

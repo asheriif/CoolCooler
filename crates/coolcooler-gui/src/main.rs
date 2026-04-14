@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use canvas::{Canvas, LayerSelection, Viewport};
 use coolcooler_core::frame::{self, DEFAULT_JPEG_QUALITY};
-use coolcooler_core::{CoolerLcd, DeviceInfo};
-use coolcooler_idcooling::Fx360;
+use coolcooler_core::DeviceInfo;
+use coolcooler_driver::{DisplayCapability, widgets_allowed};
 use fast_image_resize as fir;
 use iced::widget::{
     button, column, container, mouse_area, pick_list, row, scrollable, slider, text,
@@ -145,8 +145,9 @@ fn ensure_single_instance() {
 
 struct CoolCooler {
     dark_mode: bool,
-    device_info: DeviceInfo,
-    device_connected: bool,
+    driver_info: DeviceInfo,
+    driver_capability: DisplayCapability,
+    driver_connected: bool,
     selected_path: Option<PathBuf>,
 
     // Source data
@@ -233,15 +234,27 @@ enum Message {
 
 impl CoolCooler {
     fn boot() -> (Self, Task<Message>) {
-        let (connected, info) = detect_device();
+        let (connected, info, capability) = match coolcooler_driver::detect_device() {
+            Some(driver) => {
+                let info = driver.info().clone();
+                let cap = driver.capability();
+                (true, info, cap)
+            }
+            None => {
+                // No device found — show UI in disconnected state with default info
+                let info = DeviceInfo::default();
+                (false, info, DisplayCapability::Streaming)
+            }
+        };
         let (tray_handle, tray_rx) = tray::spawn();
 
         let (id, open_task) = window::open(app_window_settings());
 
         let mut app = Self {
             dark_mode: true,
-            device_info: info,
-            device_connected: connected,
+            driver_info: info,
+            driver_capability: capability,
+            driver_connected: connected,
             selected_path: None,
             source_frames: Vec::new(),
             filename: String::new(),
@@ -288,7 +301,7 @@ impl CoolCooler {
     }
 
     fn lcd_size(&self) -> u32 {
-        self.device_info.resolution.width
+        self.driver_info.resolution.width
     }
 
     /// Render the full composited 240x240 RGBA (base + widgets).
@@ -296,7 +309,7 @@ impl CoolCooler {
         let lcd = self.lcd_size();
         let base = if let Some(src) = self.source_frames.get(self.current_frame) {
             let vp = &self.canvas.base_viewport;
-            render_base_rgba(&src.rgba, &self.device_info, vp.zoom, vp.pan)
+            render_base_rgba(&src.rgba, &self.driver_info, vp.zoom, vp.pan)
         } else {
             RgbaImage::from_pixel(lcd, lcd, Rgba([0, 0, 0, 255]))
         };
@@ -376,7 +389,7 @@ impl CoolCooler {
 
     /// Start (or restart) the device display thread.
     fn start_display(&mut self) {
-        if !self.device_connected {
+        if !self.driver_connected {
             return;
         }
         self.stop_signal.store(true, Ordering::Relaxed);
@@ -388,9 +401,14 @@ impl CoolCooler {
 
         self.push_device_frame();
 
-        std::thread::spawn(move || {
-            run_display(shared, &stop);
-        });
+        // Detect a fresh driver instance for the display thread.
+        // Each display session gets its own connection.
+        if let Some(driver) = coolcooler_driver::detect_device() {
+            let shared_clone = shared;
+            std::thread::spawn(move || {
+                coolcooler_driver::run_display(driver, shared_clone, &stop);
+            });
+        }
 
         self.display_active = true;
     }
@@ -398,12 +416,24 @@ impl CoolCooler {
     /// Encode the current composited frame and push to the device thread.
     fn push_device_frame(&self) {
         let composited = self.render_composited();
-        let rgb = DynamicImage::ImageRgba8(composited).to_rgb8();
-        if let Ok(jpeg) =
-            frame::encode_resized(&rgb, self.device_info.rotation, DEFAULT_JPEG_QUALITY)
-        {
+        let encoded = match self.driver_capability {
+            DisplayCapability::Streaming => {
+                let rgb = DynamicImage::ImageRgba8(composited).to_rgb8();
+                frame::encode_resized(&rgb, self.driver_info.rotation, DEFAULT_JPEG_QUALITY)
+                    .ok()
+            }
+            DisplayCapability::FileTransfer => {
+                // PNG encode — liquidctl handles resizing/format conversion
+                let mut buf = std::io::Cursor::new(Vec::new());
+                DynamicImage::ImageRgba8(composited)
+                    .write_to(&mut buf, image::ImageFormat::Png)
+                    .ok()
+                    .map(|()| buf.into_inner())
+            }
+        };
+        if let Some(bytes) = encoded {
             if let Ok(mut frame) = self.device_frame.lock() {
-                *frame = jpeg;
+                *frame = bytes;
             }
         }
     }
@@ -469,6 +499,14 @@ impl CoolCooler {
                                 duration: f.duration,
                             })
                             .collect();
+
+                        // On file-transfer devices, clear widgets when loading a GIF
+                        if !widgets_allowed(self.driver_capability, count > 1)
+                            && !self.canvas.layers.is_empty()
+                        {
+                            self.canvas.layers.clear();
+                            self.canvas.active_layer = LayerSelection::Base;
+                        }
 
                         let detail = if count > 1 {
                             format!(" ({count} frames)")
@@ -627,6 +665,10 @@ impl CoolCooler {
                 self.selected_category = cat;
             }
             Message::AddWidget(catalog_idx) => {
+                // Block adding widgets when GIF is loaded on a file-transfer device
+                if !widgets_allowed(self.driver_capability, self.is_animated()) {
+                    return Task::none();
+                }
                 if let Some(template) = self.widget_catalog.get(catalog_idx) {
                     let instance = template.create_instance();
                     let id = self.canvas.add_widget(instance, self.lcd_size());
@@ -876,8 +918,8 @@ impl CoolCooler {
         .align_y(iced::Alignment::Center);
 
         // -- Device card --
-        let device_content = if self.device_connected {
-            let info = &self.device_info;
+        let device_content = if self.driver_connected {
+            let info = &self.driver_info;
             let (w, h) = (info.resolution.width, info.resolution.height);
             column![
                 section_label("DEVICE", c),
@@ -1213,53 +1255,68 @@ impl CoolCooler {
             .push(quit_btn);
 
         // -- Right panel: widget catalog --
-        let categories: Vec<String> = widget::categories(&self.widget_catalog)
-            .into_iter()
-            .map(|s| s.to_string())
-            .collect();
+        let right_panel = if !widgets_allowed(self.driver_capability, self.is_animated()) {
+            card(
+                column![
+                    text("Widgets").size(18).color(c.text_primary),
+                    text("Widgets with animated backgrounds are not supported on this device.")
+                        .size(13)
+                        .color(c.text_dim),
+                ]
+                .spacing(12),
+                c,
+            )
+            .width(Length::FillPortion(3))
+            .height(Length::Fill)
+        } else {
+            let categories: Vec<String> = widget::categories(&self.widget_catalog)
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect();
 
-        let category_picker = pick_list(
-            categories,
-            Some(self.selected_category.clone()),
-            Message::SelectCategory,
-        )
-        .width(Length::Fill)
-        .text_size(13);
+            let category_picker = pick_list(
+                categories,
+                Some(self.selected_category.clone()),
+                Message::SelectCategory,
+            )
+            .width(Length::Fill)
+            .text_size(13);
 
-        let mut catalog_items = column![].spacing(6);
-        for (i, w) in self.widget_catalog.iter().enumerate() {
-            let desc = w.descriptor();
-            if desc.category != self.selected_category {
-                continue;
-            }
-            catalog_items = catalog_items.push(
-                button(text(desc.name).size(13).color(c.text_primary).center())
-                    .padding([8, 12])
-                    .width(Length::Fill)
-                    .style(|_: &Theme, _| button::Style {
-                        background: Some(Background::Color(c.surface)),
-                        text_color: c.text_primary,
-                        border: Border {
-                            radius: 8.0.into(),
+            let mut catalog_items = column![].spacing(6);
+            for (i, w) in self.widget_catalog.iter().enumerate() {
+                let desc = w.descriptor();
+                if desc.category != self.selected_category {
+                    continue;
+                }
+                catalog_items = catalog_items.push(
+                    button(text(desc.name).size(13).color(c.text_primary).center())
+                        .padding([8, 12])
+                        .width(Length::Fill)
+                        .style(|_: &Theme, _| button::Style {
+                            background: Some(Background::Color(c.surface)),
+                            text_color: c.text_primary,
+                            border: Border {
+                                radius: 8.0.into(),
+                                ..Default::default()
+                            },
                             ..Default::default()
-                        },
-                        ..Default::default()
-                    })
-                    .on_press(Message::AddWidget(i)),
-            );
-        }
+                        })
+                        .on_press(Message::AddWidget(i)),
+                );
+            }
 
-        let right_panel = card(
-            column![
-                text("Widgets").size(18).color(c.text_primary),
-                category_picker,
-                catalog_items,
-            ]
-            .spacing(12),
-            c,
-        )
-        .width(Length::FillPortion(3))
-        .height(Length::Fill);
+            card(
+                column![
+                    text("Widgets").size(18).color(c.text_primary),
+                    category_picker,
+                    catalog_items,
+                ]
+                .spacing(12),
+                c,
+            )
+            .width(Length::FillPortion(3))
+            .height(Length::Fill)
+        };
 
         // -- Footer --
         let footer = text("Made with ♥ by asheriif")
@@ -1694,18 +1751,6 @@ fn app_window_settings() -> window::Settings {
     }
 }
 
-// -- Device --
-
-fn detect_device() -> (bool, DeviceInfo) {
-    let mut lcd = Fx360::new();
-    let info = lcd.info().clone();
-    let connected = lcd.connect().is_ok();
-    if connected {
-        lcd.disconnect();
-    }
-    (connected, info)
-}
-
 async fn pick_file() -> Option<PathBuf> {
     rfd::AsyncFileDialog::new()
         .add_filter("Images", &["png", "jpg", "jpeg", "bmp", "gif", "webp"])
@@ -1714,41 +1759,3 @@ async fn pick_file() -> Option<PathBuf> {
         .map(|h| h.path().to_path_buf())
 }
 
-/// Device display loop. Reads the latest JPEG from the shared buffer
-/// and sends it to the device at the target frame rate.
-/// The UI thread pushes updated JPEGs when content changes.
-fn run_display(shared_frame: Arc<Mutex<Vec<u8>>>, stop: &AtomicBool) {
-    let mut lcd = Fx360::new();
-    if lcd.connect().is_err() {
-        return;
-    }
-
-    let device_interval = Duration::from_secs_f64(1.0 / lcd.info().target_fps);
-    let keepalive_interval = lcd.info().keepalive_interval;
-    let mut last_keepalive = Instant::now();
-    let mut current_jpeg = Vec::new();
-
-    while !stop.load(Ordering::Relaxed) {
-        // Pick up latest frame from UI thread
-        if let Ok(frame) = shared_frame.lock() {
-            if !frame.is_empty() && *frame != current_jpeg {
-                current_jpeg = frame.clone();
-            }
-        }
-
-        if !current_jpeg.is_empty() {
-            if lcd.send_frame(&current_jpeg).is_err() {
-                return;
-            }
-        }
-
-        if last_keepalive.elapsed() >= keepalive_interval {
-            if lcd.send_keepalive().is_err() {
-                return;
-            }
-            last_keepalive = Instant::now();
-        }
-
-        std::thread::sleep(device_interval);
-    }
-}
