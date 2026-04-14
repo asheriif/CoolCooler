@@ -1,3 +1,9 @@
 /target
 /dist
 investigation/
+.claude/
+.codex
+AGENTS.md
+CLAUDE.md
+TODO.md
+coolcooler.desktop
