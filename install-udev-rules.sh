@@ -14,4 +14,4 @@ udevadm control --reload-rules
 udevadm trigger
 
 echo "udev rules installed to $RULES_FILE"
-echo "You may need to re-plug the USB device for changes to take effect."
+echo "If the cooler is still not detected, reboot so the new device permissions are applied cleanly."
