@@ -30,7 +30,7 @@ pub fn widgets_allowed(capability: DisplayCapability, is_animated: bool) -> bool
 /// Unified device driver.
 ///
 /// Enum dispatch over native (streaming) and liquidctl (file-transfer) backends.
-/// The GUI and CLI use this as their sole device interface.
+/// The GUI uses this as its sole device interface.
 pub enum DisplayDriver {
     Native(Fx360),
     Liquidctl(LiquidctlDriver),

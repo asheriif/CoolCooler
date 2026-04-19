@@ -71,14 +71,6 @@ Run the GUI:
 cargo run -p coolcooler-gui
 ```
 
-Run the CLI test tool:
-
-```bash
-cargo run -p coolcooler-cli -- test
-cargo run -p coolcooler-cli -- color '#00ffaa'
-cargo run -p coolcooler-cli -- image ./image.png
-```
-
 ## AppImage Packaging
 
 Build the release AppImage in a dedicated Ubuntu 22.04 distrobox for broader compatibility. Create the container once from the repository root:
@@ -126,7 +118,6 @@ crates/coolcooler-core       Shared traits, types, errors, and frame preparation
 crates/coolcooler-idcooling  Native ID-Cooling FX360 protocol and USB transport
 crates/coolcooler-liquidctl  Device registry and liquidctl command integration
 crates/coolcooler-driver     Unified detection and display-loop driver layer
-crates/coolcooler-cli        Test CLI
 crates/coolcooler-gui        iced desktop GUI, widgets, presets, and tray support
 assets/                      Bundled icons and fonts
 packaging/appimage/          AppImage metadata and build scripts
