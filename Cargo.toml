@@ -2,6 +2,9 @@
 members = ["crates/*"]
 resolver = "2"
 
+[workspace.package]
+license = "GPL-3.0-or-later"
+
 # opt-level 1 for dev builds: needed for image/media processing to be usable.
 # opt-level 2 for dependencies: they benefit from full optimization.
 [profile.dev]

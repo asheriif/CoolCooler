@@ -147,3 +147,9 @@ They are not stored inside the AppImage or repository checkout.
 - KDE Plasma should show both taskbar and system tray icons. GNOME may require an AppIndicator/StatusNotifier extension for tray visibility.
 - AppImage builds intentionally use the host `libudev.so.1` at runtime.
 - The current udev helper only covers the ID-Cooling native USB device.
+
+## License
+
+CoolCooler is licensed under the GNU General Public License v3.0 or later. You may use, modify, fork, and redistribute it, including commercially, but distributed copies and modified versions must preserve the same GPL freedoms and provide corresponding source code.
+
+See [LICENSE](LICENSE) for the full license text. Unless explicitly stated otherwise, contributions are licensed under `GPL-3.0-or-later`.

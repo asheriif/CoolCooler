@@ -2,6 +2,7 @@
 name = "coolcooler-core"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
