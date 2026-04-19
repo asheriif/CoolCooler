@@ -37,7 +37,11 @@ fetch_linuxdeploy() {
 fetch_linuxdeploy
 
 export APPIMAGE_EXTRACT_AND_RUN=1
-export LINUXDEPLOY_OUTPUT_VERSION="${LINUXDEPLOY_OUTPUT_VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' "${REPO_ROOT}/crates/coolcooler-gui/Cargo.toml" | head -n1)}"
+export LINUXDEPLOY_OUTPUT_VERSION="${LINUXDEPLOY_OUTPUT_VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' "${REPO_ROOT}/Cargo.toml" | head -n1)}"
+if [[ -z "${LINUXDEPLOY_OUTPUT_VERSION}" ]]; then
+    echo "Could not determine AppImage version from workspace Cargo.toml" >&2
+    exit 1
+fi
 export CARGO_TARGET_DIR
 
 rm -rf "${APPDIR}"
