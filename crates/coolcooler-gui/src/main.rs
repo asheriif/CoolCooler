@@ -221,9 +221,15 @@ enum Message {
     SaveNameChanged(String),
     SavePreset,
     SavePresetAs,
+    LoadLastPreset(String),
     PresetClicked(String),
     DeletePreset(String),
-    PresetSourceLoaded(Result<LoadedData, String>, preset::PresetData),
+    PresetSourceLoaded {
+        result: Result<LoadedData, String>,
+        data: preset::PresetData,
+        folder: String,
+        silent: bool,
+    },
     ToggleTheme,
     WindowClosed(window::Id),
     TrayPoll,
@@ -284,7 +290,12 @@ impl CoolCooler {
             window_id: Some(id),
         };
         app.rebuild_preview();
-        (app, open_task.discard())
+
+        let startup_task = preset::last_used_folder()
+            .map(|folder| Task::done(Message::LoadLastPreset(folder)))
+            .unwrap_or_else(Task::none);
+
+        (app, Task::batch([open_task.discard(), startup_task]))
     }
 
     fn has_source(&self) -> bool {
@@ -388,6 +399,94 @@ impl CoolCooler {
         }
 
         self.rebuild_preview();
+    }
+
+    fn load_preset_folder(&mut self, folder: String, silent: bool) -> Task<Message> {
+        let (data, bg_path) = match preset::load(&folder) {
+            Ok(loaded) => loaded,
+            Err(e) => {
+                if !silent {
+                    self.status_message = format!("Load failed: {e}");
+                }
+                return Task::none();
+            }
+        };
+
+        if let Some(path) = bg_path {
+            if !path.exists() {
+                if !silent {
+                    self.status_message = "Load failed: background file missing".to_string();
+                }
+                return Task::none();
+            }
+
+            let filename = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let path_clone = path.clone();
+
+            self.loading = true;
+            if !silent {
+                self.status_message = "Loading preset...".to_string();
+            }
+
+            return Task::perform(
+                async move { load_source_data(&path_clone, filename) },
+                move |result| Message::PresetSourceLoaded {
+                    result,
+                    data,
+                    folder,
+                    silent,
+                },
+            );
+        }
+
+        self.apply_loaded_preset(folder, data, None, silent);
+        Task::none()
+    }
+
+    fn apply_loaded_preset(
+        &mut self,
+        folder: String,
+        data: preset::PresetData,
+        loaded_source: Option<LoadedData>,
+        silent: bool,
+    ) {
+        let name = data.name.clone();
+
+        if let Some(loaded) = loaded_source {
+            let LoadedData { frames, filename } = loaded;
+            self.filename = filename;
+            self.source_frames = Arc::try_unwrap(frames)
+                .unwrap_or_else(|arc| (*arc).clone())
+                .into_iter()
+                .map(|f| SourceFrame {
+                    rgba: RgbaImage::from_raw(f.width, f.height, f.pixels).unwrap(),
+                    duration: f.duration,
+                })
+                .collect();
+
+            if let Some(bg) = data.background.as_ref() {
+                self.selected_path = Some(preset::preset_file_path(&folder, &bg.file));
+            }
+        } else {
+            self.source_frames.clear();
+            self.selected_path = None;
+            self.filename.clear();
+        }
+
+        self.current_preset_folder = Some(folder.clone());
+        self.current_preset_name = Some(name.clone());
+        self.current_frame = 0;
+        self.last_advance = Instant::now();
+        self.apply_preset_config(&data);
+        self.start_display();
+        preset::remember_last_used(&folder);
+
+        if !silent || self.status_message.is_empty() {
+            self.status_message = format!("Loaded preset '{name}'");
+        }
     }
 
     /// Start (or restart) the device display thread.
@@ -726,7 +825,12 @@ impl CoolCooler {
                         &composited,
                         &data,
                     ) {
-                        Ok(_) => self.status_message = format!("Preset '{name}' saved"),
+                        Ok(folder) => {
+                            self.current_preset_folder = Some(folder.clone());
+                            self.current_preset_name = Some(name.clone());
+                            preset::remember_last_used(&folder);
+                            self.status_message = format!("Preset '{name}' saved");
+                        }
                         Err(e) => self.status_message = format!("Save failed: {e}"),
                     }
                 } else {
@@ -763,6 +867,7 @@ impl CoolCooler {
                         &data,
                     ) {
                         Ok(folder) => {
+                            preset::remember_last_used(&folder);
                             self.current_preset_folder = Some(folder);
                             self.current_preset_name = Some(name.clone());
                             self.show_save_dialog = false;
@@ -775,6 +880,9 @@ impl CoolCooler {
             Message::SavePresetAs => {
                 self.save_name_input.clear();
                 self.show_save_dialog = true;
+            }
+            Message::LoadLastPreset(folder) => {
+                return self.load_preset_folder(folder, true);
             }
             Message::PresetClicked(folder) => {
                 // Double-click detection: load if same folder clicked within 400ms
@@ -791,73 +899,31 @@ impl CoolCooler {
 
                 self.last_preset_click = None;
                 self.show_load_dialog = false;
-                match preset::load(&folder) {
-                    Ok((data, bg_path)) => {
-                        self.current_preset_folder = Some(folder);
-                        self.current_preset_name = Some(data.name.clone());
-
-                        if let Some(ref path) = bg_path {
-                            if path.exists() {
-                                let filename = path
-                                    .file_name()
-                                    .map(|n| n.to_string_lossy().to_string())
-                                    .unwrap_or_default();
-                                self.loading = true;
-                                self.status_message = "Loading preset...".to_string();
-                                let path_clone = path.clone();
-                                return Task::perform(
-                                    async move { load_source_data(&path_clone, filename) },
-                                    move |result| Message::PresetSourceLoaded(result, data),
-                                );
-                            }
-                        }
-
-                        // No background — just apply widgets/viewport
-                        self.source_frames.clear();
-                        self.selected_path = None;
-                        self.filename.clear();
-                        self.current_frame = 0;
-                        self.apply_preset_config(&data);
-                        self.start_display();
-                        self.status_message = format!("Loaded preset '{}'", data.name);
-                    }
-                    Err(e) => self.status_message = format!("Load failed: {e}"),
-                }
+                return self.load_preset_folder(folder, false);
             }
-            Message::PresetSourceLoaded(result, data) => {
+            Message::PresetSourceLoaded {
+                result,
+                data,
+                folder,
+                silent,
+            } => {
                 self.loading = false;
                 match result {
                     Ok(loaded) => {
-                        self.source_frames = loaded
-                            .frames
-                            .iter()
-                            .map(|f| SourceFrame {
-                                rgba: RgbaImage::from_raw(f.width, f.height, f.pixels.clone())
-                                    .unwrap(),
-                                duration: f.duration,
-                            })
-                            .collect();
-                        self.filename = loaded.filename;
-                        // Set selected_path to the preset's background file
-                        if let (Some(bg), Some(folder)) = (
-                            data.background.as_ref(),
-                            self.current_preset_folder.as_deref(),
-                        ) {
-                            self.selected_path = Some(preset::preset_file_path(folder, &bg.file));
-                        }
-                        self.current_frame = 0;
-                        self.last_advance = Instant::now();
-                        self.apply_preset_config(&data);
-                        self.start_display();
-                        self.status_message = format!("Loaded preset '{}'", data.name);
+                        self.apply_loaded_preset(folder, data, Some(loaded), silent);
                     }
-                    Err(e) => self.status_message = format!("Load failed: {e}"),
+                    Err(e) => {
+                        if !silent {
+                            self.status_message = format!("Load failed: {e}");
+                        }
+                    }
                 }
             }
             Message::DeletePreset(folder) => {
                 if let Err(e) = preset::delete(&folder) {
                     self.status_message = format!("Delete failed: {e}");
                 } else {
+                    preset::forget_last_used_if(&folder);
                     self.preset_list = preset::list();
                     // If we deleted the current preset, clear all tracking
                     if self.current_preset_folder.as_deref() == Some(&folder) {

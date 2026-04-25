@@ -6,6 +6,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const APP_DIR_NAME: &str = "coolcooler";
+const LAST_PRESET_FILE: &str = "last_preset.json";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LastPresetData {
+    folder: String,
+}
 
 /// On-disk preset data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +60,48 @@ pub fn presets_dir() -> PathBuf {
 /// Path to a file inside a saved preset folder.
 pub fn preset_file_path(folder: &str, file: &str) -> PathBuf {
     presets_dir().join(folder).join(file)
+}
+
+/// Return the last preset folder recorded by the app, if it still exists.
+pub fn last_used_folder() -> Option<String> {
+    let folder = read_last_used_folder()?;
+
+    presets_dir()
+        .join(&folder)
+        .join("preset.json")
+        .exists()
+        .then_some(folder)
+}
+
+/// Best-effort persistence for the last preset folder.
+pub fn remember_last_used(folder: &str) {
+    if folder.is_empty() {
+        return;
+    }
+
+    let dir = data_dir();
+    let data = LastPresetData {
+        folder: folder.to_string(),
+    };
+    let Ok(json) = serde_json::to_string_pretty(&data) else {
+        return;
+    };
+
+    let _ = fs::create_dir_all(&dir);
+    let _ = fs::write(dir.join(LAST_PRESET_FILE), json);
+}
+
+/// Clear the last-used pointer if it references the given preset folder.
+pub fn forget_last_used_if(folder: &str) {
+    if read_last_used_folder().as_deref() == Some(folder) {
+        let _ = fs::remove_file(data_dir().join(LAST_PRESET_FILE));
+    }
+}
+
+fn read_last_used_folder() -> Option<String> {
+    let json = fs::read_to_string(data_dir().join(LAST_PRESET_FILE)).ok()?;
+    let data: LastPresetData = serde_json::from_str(&json).ok()?;
+    (!data.folder.is_empty()).then_some(data.folder)
 }
 
 fn data_dir() -> PathBuf {
