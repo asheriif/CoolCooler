@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use image::{AnimationDecoder, RgbaImage};
 
+#[derive(Clone)]
 pub(crate) struct SourceFrame {
     pub(crate) rgba: RgbaImage,
     pub(crate) duration: Duration,
@@ -13,16 +14,8 @@ pub(crate) struct SourceFrame {
 
 #[derive(Clone)]
 pub(crate) struct LoadedData {
-    pub(crate) frames: Arc<Vec<LoadedFrame>>,
+    frames: Arc<Vec<SourceFrame>>,
     pub(crate) filename: String,
-}
-
-#[derive(Clone)]
-pub(crate) struct LoadedFrame {
-    pub(crate) pixels: Vec<u8>,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) duration: Duration,
 }
 
 impl std::fmt::Debug for LoadedData {
@@ -31,6 +24,17 @@ impl std::fmt::Debug for LoadedData {
             .field("frames", &self.frames.len())
             .field("filename", &self.filename)
             .finish()
+    }
+}
+
+impl LoadedData {
+    pub(crate) fn frame_count(&self) -> usize {
+        self.frames.len()
+    }
+
+    pub(crate) fn into_parts(self) -> (Vec<SourceFrame>, String) {
+        let frames = Arc::try_unwrap(self.frames).unwrap_or_else(|arc| (*arc).clone());
+        (frames, self.filename)
     }
 }
 
@@ -46,10 +50,8 @@ pub(crate) fn load_source_data(path: &Path, filename: String) -> Result<LoadedDa
     } else {
         let img = image::open(path).map_err(|e| e.to_string())?;
         let rgba = img.to_rgba8();
-        vec![LoadedFrame {
-            width: rgba.width(),
-            height: rgba.height(),
-            pixels: rgba.into_raw(),
+        vec![SourceFrame {
+            rgba,
             duration: Duration::MAX,
         }]
     };
@@ -60,7 +62,7 @@ pub(crate) fn load_source_data(path: &Path, filename: String) -> Result<LoadedDa
     })
 }
 
-fn load_gif_source_data(path: &Path) -> Result<Vec<LoadedFrame>, String> {
+fn load_gif_source_data(path: &Path) -> Result<Vec<SourceFrame>, String> {
     let file = BufReader::new(File::open(path).map_err(|e| e.to_string())?);
     let decoder = image::codecs::gif::GifDecoder::new(file).map_err(|e| e.to_string())?;
     let raw_frames = decoder
@@ -79,12 +81,7 @@ fn load_gif_source_data(path: &Path) -> Result<Vec<LoadedFrame>, String> {
             let ms = if d == 0 { 100 } else { n / d };
             let duration = Duration::from_millis((ms).max(20) as u64);
             let rgba = raw.into_buffer();
-            LoadedFrame {
-                width: rgba.width(),
-                height: rgba.height(),
-                pixels: rgba.into_raw(),
-                duration,
-            }
+            SourceFrame { rgba, duration }
         })
         .collect())
 }

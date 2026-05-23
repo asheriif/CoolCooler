@@ -367,16 +367,9 @@ impl CoolCooler {
         let name = data.name.clone();
 
         if let Some(loaded) = loaded_source {
-            let LoadedData { frames, filename } = loaded;
+            let (frames, filename) = loaded.into_parts();
             self.filename = filename;
-            self.source_frames = Arc::try_unwrap(frames)
-                .unwrap_or_else(|arc| (*arc).clone())
-                .into_iter()
-                .map(|f| SourceFrame {
-                    rgba: RgbaImage::from_raw(f.width, f.height, f.pixels).unwrap(),
-                    duration: f.duration,
-                })
-                .collect();
+            self.source_frames = frames;
 
             if let Some(bg) = data.background.as_ref() {
                 self.selected_path = Some(preset::preset_file_path(&folder, &bg.file));
@@ -448,16 +441,10 @@ impl CoolCooler {
                 self.loading = false;
                 match result {
                     Ok(data) => {
-                        let count = data.frames.len();
-                        self.filename = data.filename;
-                        self.source_frames = Arc::try_unwrap(data.frames)
-                            .unwrap_or_else(|arc| (*arc).clone())
-                            .into_iter()
-                            .map(|f| SourceFrame {
-                                rgba: RgbaImage::from_raw(f.width, f.height, f.pixels).unwrap(),
-                                duration: f.duration,
-                            })
-                            .collect();
+                        let count = data.frame_count();
+                        let (frames, filename) = data.into_parts();
+                        self.filename = filename;
+                        self.source_frames = frames;
 
                         // On file-transfer devices, clear widgets when loading a GIF
                         let policy = CanvasPolicy::for_content(
