@@ -8,6 +8,7 @@ mod text;
 
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::fmt;
 
 /// Unique identifier for a widget instance on the canvas.
@@ -131,6 +132,12 @@ pub trait LcdWidget: fmt::Debug + Send {
             WidgetConfig::None => Ok(()),
             _ => Err("widget does not accept this config"),
         }
+    }
+
+    fn apply_config_value(&mut self, config: &Value) -> Result<(), &'static str> {
+        let config: WidgetConfig =
+            serde_json::from_value(config.clone()).map_err(|_| "invalid widget config")?;
+        self.apply_config(&config)
     }
 
     fn apply_edit(&mut self, _edit: WidgetEdit) {}
@@ -337,5 +344,17 @@ mod tests {
         });
 
         assert!(line.apply_config(&config).is_err());
+    }
+
+    #[test]
+    fn widget_rejects_malformed_raw_config() {
+        let mut line = static_widgets::HorizontalLine::new();
+
+        assert!(line
+            .apply_config_value(&json!({
+                "color": [255, 255, 255, 255],
+                "future": true
+            }))
+            .is_err());
     }
 }

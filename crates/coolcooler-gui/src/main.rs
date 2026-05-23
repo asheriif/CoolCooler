@@ -295,7 +295,8 @@ impl CoolCooler {
                 position: layer.position,
                 size: layer.size,
                 opacity: layer.opacity,
-                config: layer.widget.config(),
+                config: serde_json::to_value(layer.widget.config())
+                    .unwrap_or(serde_json::Value::Null),
             })
             .collect();
 
@@ -329,7 +330,7 @@ impl CoolCooler {
                 continue;
             };
             let mut w = spec.create();
-            if w.apply_config(&wd.config).is_err() {
+            if w.apply_config_value(&wd.config).is_err() {
                 skipped_widgets += 1;
                 continue;
             }

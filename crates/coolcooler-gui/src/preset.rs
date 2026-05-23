@@ -4,8 +4,7 @@ use std::path::{Path, PathBuf};
 
 use image::{codecs::png::PngEncoder, ImageEncoder, RgbaImage};
 use serde::{Deserialize, Serialize};
-
-use crate::widget::WidgetConfig;
+use serde_json::Value;
 
 const APP_DIR_NAME: &str = "coolcooler";
 const LAST_PRESET_FILE: &str = "last_preset.json";
@@ -68,7 +67,7 @@ pub struct WidgetLayerData {
     pub position: (i32, i32),
     pub size: (u32, u32),
     pub opacity: u8,
-    pub config: WidgetConfig,
+    pub config: Value,
 }
 
 /// Summary of a saved preset for the load grid.
@@ -499,6 +498,7 @@ pub fn delete(folder: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn preset_listing_hides_internal_folders() {
@@ -513,6 +513,39 @@ mod tests {
         assert_eq!(live_folder_for_internal(".demo.staging.123"), Some("demo"));
         assert_eq!(live_folder_for_internal(".demo.backup.123"), Some("demo"));
         assert_eq!(live_folder_for_internal("demo"), None);
+    }
+
+    #[test]
+    fn preset_data_keeps_widget_config_raw() {
+        let data: PresetData = serde_json::from_value(json!({
+            "version": 1,
+            "name": "Future preset",
+            "viewport": {
+                "zoom": 1.0,
+                "pan": [0.0, 0.0]
+            },
+            "widgets": [{
+                "type_id": "future_widget",
+                "position": [0, 0],
+                "size": [10, 10],
+                "opacity": 255,
+                "config": {
+                    "future": {
+                        "nested": true
+                    }
+                }
+            }]
+        }))
+        .unwrap();
+
+        assert_eq!(
+            data.widgets[0].config,
+            json!({
+                "future": {
+                    "nested": true
+                }
+            })
+        );
     }
 
     #[test]
