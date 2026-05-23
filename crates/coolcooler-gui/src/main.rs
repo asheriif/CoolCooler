@@ -1,4 +1,5 @@
 mod canvas;
+mod display_session;
 mod preset;
 mod rendering;
 mod source;
@@ -9,7 +10,6 @@ mod widget;
 mod windowing;
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -17,6 +17,7 @@ use canvas::{Canvas, LayerSelection, Viewport};
 use coolcooler_core::frame::{self, DEFAULT_JPEG_QUALITY};
 use coolcooler_core::DeviceInfo;
 use coolcooler_driver::{widgets_allowed, DisplayCapability};
+use display_session::DisplaySession;
 use iced::{mouse, window, Color, Element, Point, Subscription, Task, Theme};
 use image::{DynamicImage, Rgba, RgbaImage};
 use rendering::{circular_preview_from_rgba, render_base_rgba};
@@ -93,9 +94,7 @@ struct CoolCooler {
     last_preset_click: Option<(String, Instant)>,
 
     status_message: String,
-    display_active: bool,
-    stop_signal: Arc<AtomicBool>,
-    device_frame: Arc<Mutex<Vec<u8>>>,
+    display_session: Option<DisplaySession>,
 
     // Tray icon
     _tray_handle: tray::TrayHandle,
@@ -191,9 +190,7 @@ impl CoolCooler {
             preset_list: Vec::new(),
             last_preset_click: None,
             status_message: String::new(),
-            display_active: false,
-            stop_signal: Arc::new(AtomicBool::new(false)),
-            device_frame: Arc::new(Mutex::new(Vec::new())),
+            display_session: None,
             _tray_handle: tray_handle,
             tray_rx: Arc::new(Mutex::new(tray_rx)),
             window_id: Some(id),
@@ -242,7 +239,7 @@ impl CoolCooler {
     fn rebuild_preview(&mut self) {
         let composited = self.render_composited();
         self.preview = Some(circular_preview_from_rgba(composited));
-        if self.display_active {
+        if self.display_session.is_some() {
             self.push_device_frame();
         }
     }
@@ -402,34 +399,28 @@ impl CoolCooler {
 
     /// Start (or restart) the device display thread.
     fn start_display(&mut self) {
+        self.stop_display();
         if !self.driver_connected {
             return;
         }
-        self.stop_signal.store(true, Ordering::Relaxed);
 
-        let stop = Arc::new(AtomicBool::new(false));
-        self.stop_signal = stop.clone();
-        let shared = Arc::new(Mutex::new(Vec::new()));
-        self.device_frame = shared.clone();
-
-        self.push_device_frame();
-
-        // Detect a fresh driver instance for the display thread.
-        // Each display session gets its own connection.
-        if let Some(driver) = coolcooler_driver::detect_device() {
-            let shared_clone = shared;
-            std::thread::spawn(move || {
-                coolcooler_driver::run_display(driver, shared_clone, &stop);
-            });
+        if let (Some(driver), Some(frame)) = (
+            coolcooler_driver::detect_device(),
+            self.encode_device_frame(),
+        ) {
+            self.display_session = Some(DisplaySession::start(driver, frame));
         }
-
-        self.display_active = true;
     }
 
-    /// Encode the current composited frame and push to the device thread.
-    fn push_device_frame(&self) {
+    fn stop_display(&mut self) {
+        if let Some(session) = self.display_session.take() {
+            session.stop();
+        }
+    }
+
+    fn encode_device_frame(&self) -> Option<Vec<u8>> {
         let composited = self.render_composited();
-        let encoded = match self.driver_capability {
+        match self.driver_capability {
             DisplayCapability::Streaming => {
                 let rgb = DynamicImage::ImageRgba8(composited).to_rgb8();
                 frame::encode_resized(&rgb, self.driver_info.rotation, DEFAULT_JPEG_QUALITY).ok()
@@ -442,11 +433,15 @@ impl CoolCooler {
                     .ok()
                     .map(|()| buf.into_inner())
             }
-        };
-        if let Some(bytes) = encoded {
-            if let Ok(mut frame) = self.device_frame.lock() {
-                *frame = bytes;
-            }
+        }
+    }
+
+    /// Encode the current composited frame and push to the device thread.
+    fn push_device_frame(&self) {
+        if let (Some(session), Some(bytes)) =
+            (self.display_session.as_ref(), self.encode_device_frame())
+        {
+            session.submit_frame(bytes);
         }
     }
 
@@ -477,8 +472,7 @@ impl CoolCooler {
             }
             Message::FileSelected(Some(path)) => {
                 self.selected_path = Some(path.clone());
-                self.stop_signal.store(true, Ordering::Relaxed);
-                self.display_active = false;
+                self.stop_display();
                 self.source_frames.clear();
                 self.preview = None;
                 self.loading = true;
@@ -543,7 +537,7 @@ impl CoolCooler {
                         self.current_frame = (self.current_frame + 1) % self.source_frames.len();
                         self.last_advance = Instant::now();
                         self.rebuild_preview();
-                        if self.display_active {
+                        if self.display_session.is_some() {
                             self.push_device_frame();
                         }
                     }
@@ -563,7 +557,7 @@ impl CoolCooler {
 
                 if self.canvas.tick_widgets(&self.widget_ctx) {
                     self.rebuild_preview();
-                    if self.display_active {
+                    if self.display_session.is_some() {
                         self.push_device_frame();
                     }
                 }
@@ -876,7 +870,7 @@ impl CoolCooler {
                 return task.discard();
             }
             Message::Quit => {
-                self.stop_signal.store(true, Ordering::Relaxed);
+                self.stop_display();
                 return iced::exit();
             }
         }
