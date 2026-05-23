@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -10,6 +11,29 @@ const APP_DIR_NAME: &str = "coolcooler";
 const LAST_PRESET_FILE: &str = "last_preset.json";
 const STAGING_MARKER: &str = ".staging.";
 const BACKUP_MARKER: &str = ".backup.";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InternalPresetKind {
+    Staging,
+    Backup,
+}
+
+impl InternalPresetKind {
+    fn recovery_priority(self) -> u8 {
+        match self {
+            Self::Staging => 1,
+            Self::Backup => 0,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct InternalPresetDir {
+    path: PathBuf,
+    folder_name: String,
+    kind: InternalPresetKind,
+    valid: bool,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LastPresetData {
@@ -283,10 +307,15 @@ fn unique_suffix() -> String {
 /// Best-effort recovery for save staging folders left by an interrupted app run.
 pub fn cleanup_stale_internal_dirs() {
     let dir = presets_dir();
+    cleanup_stale_internal_dirs_in(&dir);
+}
+
+fn cleanup_stale_internal_dirs_in(dir: &Path) {
     let Ok(entries) = fs::read_dir(&dir) else {
         return;
     };
 
+    let mut internal_dirs: HashMap<String, Vec<InternalPresetDir>> = HashMap::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_dir() {
@@ -296,20 +325,35 @@ pub fn cleanup_stale_internal_dirs() {
         let Some(folder) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        let Some(live_folder) = live_folder_for_internal(folder) else {
+        let Some((live_folder, kind)) = internal_folder_parts(folder) else {
             continue;
         };
+        let folder_name = folder.to_string();
 
+        internal_dirs
+            .entry(live_folder.to_string())
+            .or_default()
+            .push(InternalPresetDir {
+                valid: is_valid_preset_dir(&path),
+                path,
+                folder_name,
+                kind,
+            });
+    }
+
+    for (live_folder, candidates) in internal_dirs {
         let live_dir = dir.join(live_folder);
         if is_valid_preset_dir(&live_dir) {
-            let _ = fs::remove_dir_all(path);
+            remove_internal_dirs(candidates.iter());
             continue;
         }
 
-        if is_valid_preset_dir(&path) {
-            let _ = fs::rename(&path, &live_dir);
+        if let Some(recovery_path) = recovery_candidate(&candidates).map(|c| c.path.clone()) {
+            if restore_internal_dir(&recovery_path, &live_dir) {
+                remove_internal_dirs(candidates.iter().filter(|c| c.path != recovery_path));
+            }
         } else {
-            let _ = fs::remove_dir_all(path);
+            remove_internal_dirs(candidates.iter());
         }
     }
 }
@@ -323,16 +367,58 @@ fn is_internal_folder(folder: &str) -> bool {
 }
 
 fn live_folder_for_internal(folder: &str) -> Option<&str> {
+    internal_folder_parts(folder).map(|(live_folder, _)| live_folder)
+}
+
+fn internal_folder_parts(folder: &str) -> Option<(&str, InternalPresetKind)> {
     let folder = folder.strip_prefix('.')?;
     folder
         .split_once(STAGING_MARKER)
-        .or_else(|| folder.split_once(BACKUP_MARKER))
-        .map(|(live_folder, _)| live_folder)
-        .filter(|live_folder| !live_folder.is_empty())
+        .map(|(live_folder, _)| (live_folder, InternalPresetKind::Staging))
+        .or_else(|| {
+            folder
+                .split_once(BACKUP_MARKER)
+                .map(|(live_folder, _)| (live_folder, InternalPresetKind::Backup))
+        })
+        .filter(|(live_folder, _)| !live_folder.is_empty())
 }
 
 fn is_valid_preset_dir(path: &Path) -> bool {
     path.join("preset.json").is_file()
+}
+
+fn recovery_candidate(candidates: &[InternalPresetDir]) -> Option<&InternalPresetDir> {
+    candidates
+        .iter()
+        .filter(|candidate| candidate.valid)
+        .max_by(|a, b| {
+            a.kind
+                .recovery_priority()
+                .cmp(&b.kind.recovery_priority())
+                .then_with(|| a.folder_name.cmp(&b.folder_name))
+        })
+}
+
+fn restore_internal_dir(recovery_path: &Path, live_dir: &Path) -> bool {
+    if live_dir.exists() && remove_path(live_dir).is_err() {
+        return false;
+    }
+
+    fs::rename(recovery_path, live_dir).is_ok()
+}
+
+fn remove_internal_dirs<'a>(candidates: impl Iterator<Item = &'a InternalPresetDir>) {
+    for candidate in candidates {
+        let _ = fs::remove_dir_all(&candidate.path);
+    }
+}
+
+fn remove_path(path: &Path) -> std::io::Result<()> {
+    if path.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    }
 }
 
 /// List all saved presets.
@@ -427,5 +513,39 @@ mod tests {
         assert_eq!(live_folder_for_internal(".demo.staging.123"), Some("demo"));
         assert_eq!(live_folder_for_internal(".demo.backup.123"), Some("demo"));
         assert_eq!(live_folder_for_internal("demo"), None);
+    }
+
+    #[test]
+    fn cleanup_prefers_staging_over_backup_when_live_folder_is_missing() {
+        let dir = temp_test_dir("staging-over-backup");
+        fs::create_dir_all(dir.join(".demo.backup.1")).unwrap();
+        fs::write(dir.join(".demo.backup.1").join("preset.json"), "old").unwrap();
+        fs::create_dir_all(dir.join(".demo.staging.2")).unwrap();
+        fs::write(dir.join(".demo.staging.2").join("preset.json"), "new").unwrap();
+
+        cleanup_stale_internal_dirs_in(&dir);
+
+        assert_eq!(
+            fs::read_to_string(dir.join("demo").join("preset.json")).unwrap(),
+            "new"
+        );
+        assert!(!dir.join(".demo.backup.1").exists());
+        assert!(!dir.join(".demo.staging.2").exists());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    fn temp_test_dir(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "coolcooler-preset-{name}-{}-{nanos}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path
     }
 }
