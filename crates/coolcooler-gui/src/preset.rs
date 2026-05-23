@@ -8,6 +8,8 @@ use crate::widget::WidgetSettings;
 
 const APP_DIR_NAME: &str = "coolcooler";
 const LAST_PRESET_FILE: &str = "last_preset.json";
+const STAGING_MARKER: &str = ".staging.";
+const BACKUP_MARKER: &str = ".backup.";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LastPresetData {
@@ -66,6 +68,9 @@ pub fn preset_file_path(folder: &str, file: &str) -> PathBuf {
 /// Return the last preset folder recorded by the app, if it still exists.
 pub fn last_used_folder() -> Option<String> {
     let folder = read_last_used_folder()?;
+    if is_hidden_or_internal_folder(&folder) {
+        return None;
+    }
 
     presets_dir()
         .join(&folder)
@@ -275,6 +280,35 @@ fn unique_suffix() -> String {
     format!("{}.{}", std::process::id(), nanos)
 }
 
+/// Best-effort cleanup for save staging folders left by an interrupted app run.
+pub fn cleanup_stale_internal_dirs() {
+    let Ok(entries) = fs::read_dir(presets_dir()) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(is_internal_folder)
+        {
+            let _ = fs::remove_dir_all(path);
+        }
+    }
+}
+
+fn is_hidden_or_internal_folder(folder: &str) -> bool {
+    folder.starts_with('.') || is_internal_folder(folder)
+}
+
+fn is_internal_folder(folder: &str) -> bool {
+    folder.starts_with('.') && (folder.contains(STAGING_MARKER) || folder.contains(BACKUP_MARKER))
+}
+
 /// List all saved presets.
 pub fn list() -> Vec<PresetEntry> {
     let dir = presets_dir();
@@ -288,16 +322,18 @@ pub fn list() -> Vec<PresetEntry> {
         if !path.is_dir() {
             continue;
         }
-        let config_path = path.join("preset.json");
-        if !config_path.exists() {
-            continue;
-        }
-
         let folder = path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_string();
+        if is_hidden_or_internal_folder(&folder) {
+            continue;
+        }
+        let config_path = path.join("preset.json");
+        if !config_path.exists() {
+            continue;
+        }
 
         let name = fs::read_to_string(&config_path)
             .ok()
@@ -346,4 +382,17 @@ pub fn delete(folder: &str) -> Result<(), String> {
         fs::remove_dir_all(&preset_dir).map_err(|e| format!("Failed to delete preset: {e}"))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preset_listing_hides_internal_folders() {
+        assert!(is_hidden_or_internal_folder(".demo.staging.123"));
+        assert!(is_hidden_or_internal_folder(".demo.backup.123"));
+        assert!(is_hidden_or_internal_folder(".hidden"));
+        assert!(!is_hidden_or_internal_folder("demo"));
+    }
 }

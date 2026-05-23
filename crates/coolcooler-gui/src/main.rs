@@ -198,6 +198,7 @@ impl CoolCooler {
             window_id: Some(id),
         };
         app.rebuild_preview();
+        preset::cleanup_stale_internal_dirs();
 
         let startup_task = preset::last_used_folder()
             .map(|folder| Task::done(Message::LoadLastPreset(folder)))
