@@ -224,16 +224,16 @@ fn layer_controls<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Element<'a, Mess
 fn widget_config_card<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Option<Element<'a, Message>> {
     app.canvas.active_widget_layer().map(|layer| {
         let opacity_val = layer.opacity as f32 / 255.0;
-        let config = layer.widget.config();
+        let controls = layer.widget.controls();
         let mut config_items = column![opacity_control(opacity_val, c)].spacing(8);
 
-        if let Some(color) = config.color() {
+        if let Some(color) = controls.color {
             config_items = config_items.push(color_controls(color, c));
         }
-        if let Some(font_name) = config.font_name() {
+        if let Some(font_name) = controls.font_name {
             config_items = config_items.push(font_control(font_name.to_string(), c));
         }
-        if let Some(text) = config.editable_text() {
+        if let Some(text) = controls.editable_text {
             config_items = config_items.push(text_control(text.to_string(), c));
         }
 

@@ -1,7 +1,7 @@
 use image::RgbaImage;
 
 use super::text::TextState;
-use super::{LcdWidget, WidgetConfig, WidgetContext, WidgetDescriptor, WidgetEdit};
+use super::{LcdWidget, WidgetConfig, WidgetContext, WidgetControls, WidgetDescriptor, WidgetEdit};
 
 pub const CPU_USAGE_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
     name: "CPU Usage",
@@ -74,6 +74,10 @@ macro_rules! sysinfo_text_widget {
 
             fn config(&self) -> WidgetConfig {
                 self.text.config(false)
+            }
+
+            fn controls(&self) -> WidgetControls<'_> {
+                self.text.controls(false)
             }
 
             fn apply_config(&mut self, config: &WidgetConfig) -> Result<(), &'static str> {

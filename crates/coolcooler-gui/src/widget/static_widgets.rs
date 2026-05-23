@@ -3,7 +3,7 @@ use imageproc::drawing::{draw_filled_circle_mut, draw_hollow_circle_mut};
 
 use super::text::TextState;
 use super::{
-    CircleWidgetConfig, ColorWidgetConfig, LcdWidget, WidgetConfig, WidgetContext,
+    CircleWidgetConfig, ColorWidgetConfig, LcdWidget, WidgetConfig, WidgetContext, WidgetControls,
     WidgetDescriptor, WidgetEdit,
 };
 
@@ -41,6 +41,10 @@ impl LcdWidget for FreeText {
 
     fn config(&self) -> WidgetConfig {
         self.text.config(true)
+    }
+
+    fn controls(&self) -> WidgetControls<'_> {
+        self.text.controls(true)
     }
 
     fn apply_config(&mut self, config: &WidgetConfig) -> Result<(), &'static str> {
@@ -95,6 +99,10 @@ impl LcdWidget for HorizontalLine {
 
     fn config(&self) -> WidgetConfig {
         WidgetConfig::Color(ColorWidgetConfig { color: self.color })
+    }
+
+    fn controls(&self) -> WidgetControls<'_> {
+        WidgetControls::color(self.color)
     }
 
     fn apply_config(&mut self, config: &WidgetConfig) -> Result<(), &'static str> {
@@ -155,6 +163,10 @@ impl LcdWidget for VerticalLine {
 
     fn config(&self) -> WidgetConfig {
         WidgetConfig::Color(ColorWidgetConfig { color: self.color })
+    }
+
+    fn controls(&self) -> WidgetControls<'_> {
+        WidgetControls::color(self.color)
     }
 
     fn apply_config(&mut self, config: &WidgetConfig) -> Result<(), &'static str> {
@@ -231,6 +243,10 @@ impl LcdWidget for CircleGauge {
         })
     }
 
+    fn controls(&self) -> WidgetControls<'_> {
+        WidgetControls::color(self.color)
+    }
+
     fn apply_config(&mut self, config: &WidgetConfig) -> Result<(), &'static str> {
         let WidgetConfig::Circle(config) = config else {
             return Err("expected circle widget config");
@@ -291,6 +307,10 @@ impl LcdWidget for FilledCircle {
 
     fn config(&self) -> WidgetConfig {
         WidgetConfig::Color(ColorWidgetConfig { color: self.color })
+    }
+
+    fn controls(&self) -> WidgetControls<'_> {
+        WidgetControls::color(self.color)
     }
 
     fn apply_config(&mut self, config: &WidgetConfig) -> Result<(), &'static str> {

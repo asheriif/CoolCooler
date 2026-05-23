@@ -2,7 +2,7 @@ use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use image::{Rgba, RgbaImage};
 use imageproc::drawing::draw_text_mut;
 
-use super::{fonts, TextWidgetConfig, WidgetConfig, WidgetEdit};
+use super::{fonts, TextWidgetConfig, WidgetConfig, WidgetControls, WidgetEdit};
 
 #[derive(Debug, Clone)]
 pub(super) struct TextState {
@@ -45,6 +45,14 @@ impl TextState {
             color: self.color,
             font_name: self.font_name.clone(),
         })
+    }
+
+    pub(super) fn controls(&self, allow_text: bool) -> WidgetControls<'_> {
+        WidgetControls::text(
+            self.color,
+            &self.font_name,
+            allow_text.then_some(self.text.as_str()),
+        )
     }
 
     pub(super) fn apply_config(

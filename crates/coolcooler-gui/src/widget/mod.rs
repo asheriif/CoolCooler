@@ -43,27 +43,26 @@ pub enum WidgetConfig {
     None,
 }
 
-impl WidgetConfig {
-    pub fn color(&self) -> Option<[u8; 4]> {
-        match self {
-            Self::Text(config) => Some(config.color),
-            Self::Circle(config) => Some(config.color),
-            Self::Color(config) => Some(config.color),
-            Self::None => None,
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WidgetControls<'a> {
+    pub color: Option<[u8; 4]>,
+    pub font_name: Option<&'a str>,
+    pub editable_text: Option<&'a str>,
+}
+
+impl<'a> WidgetControls<'a> {
+    pub fn color(color: [u8; 4]) -> Self {
+        Self {
+            color: Some(color),
+            ..Self::default()
         }
     }
 
-    pub fn font_name(&self) -> Option<&str> {
-        match self {
-            Self::Text(config) => Some(&config.font_name),
-            _ => None,
-        }
-    }
-
-    pub fn editable_text(&self) -> Option<&str> {
-        match self {
-            Self::Text(config) => config.text.as_deref(),
-            _ => None,
+    pub fn text(color: [u8; 4], font_name: &'a str, editable_text: Option<&'a str>) -> Self {
+        Self {
+            color: Some(color),
+            font_name: Some(font_name),
+            editable_text,
         }
     }
 }
@@ -125,6 +124,10 @@ pub trait LcdWidget: fmt::Debug + Send {
 
     fn config(&self) -> WidgetConfig {
         WidgetConfig::None
+    }
+
+    fn controls(&self) -> WidgetControls<'_> {
+        WidgetControls::default()
     }
 
     fn apply_config(&mut self, config: &WidgetConfig) -> Result<(), &'static str> {
@@ -356,5 +359,27 @@ mod tests {
                 "future": true
             }))
             .is_err());
+    }
+
+    #[test]
+    fn widget_controls_are_explicit_for_dynamic_text() {
+        let clock = clock::Clock::new();
+        let controls = clock.controls();
+
+        assert_eq!(controls.color, Some([255, 255, 255, 255]));
+        assert_eq!(controls.font_name, Some(fonts::DEFAULT_FONT));
+        assert_eq!(controls.editable_text, None);
+        assert!(matches!(
+            clock.config(),
+            WidgetConfig::Text(TextWidgetConfig { text: None, .. })
+        ));
+    }
+
+    #[test]
+    fn free_text_exposes_editable_text_control() {
+        let free_text = static_widgets::FreeText::new();
+        let controls = free_text.controls();
+
+        assert_eq!(controls.editable_text, Some("Text"));
     }
 }

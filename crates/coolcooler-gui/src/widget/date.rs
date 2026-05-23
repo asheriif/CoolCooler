@@ -2,7 +2,7 @@ use chrono::Local;
 use image::RgbaImage;
 
 use super::text::TextState;
-use super::{LcdWidget, WidgetConfig, WidgetContext, WidgetDescriptor, WidgetEdit};
+use super::{LcdWidget, WidgetConfig, WidgetContext, WidgetControls, WidgetDescriptor, WidgetEdit};
 
 pub const DATE_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
     name: "Date",
@@ -46,6 +46,10 @@ impl LcdWidget for DateWidget {
 
     fn config(&self) -> WidgetConfig {
         self.text.config(false)
+    }
+
+    fn controls(&self) -> WidgetControls<'_> {
+        self.text.controls(false)
     }
 
     fn apply_config(&mut self, config: &WidgetConfig) -> Result<(), &'static str> {
