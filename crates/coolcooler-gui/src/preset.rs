@@ -39,6 +39,50 @@ struct LastPresetData {
     folder: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PresetFolder(String);
+
+impl PresetFolder {
+    pub fn parse(folder: impl Into<String>) -> Option<Self> {
+        let folder = folder.into();
+        is_valid_preset_folder(&folder).then_some(Self(folder))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    fn path(&self) -> PathBuf {
+        presets_dir().join(&self.0)
+    }
+}
+
+impl std::fmt::Display for PresetFolder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PresetAsset(String);
+
+impl PresetAsset {
+    fn parse(asset: impl Into<String>) -> Option<Self> {
+        let asset = asset.into();
+        is_valid_preset_asset(&asset).then_some(Self(asset))
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LoadedPreset {
+    pub data: PresetData,
+    pub background_path: Option<PathBuf>,
+}
+
 /// On-disk preset data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PresetData {
@@ -74,7 +118,7 @@ pub struct WidgetLayerData {
 #[derive(Debug, Clone)]
 pub struct PresetEntry {
     pub name: String,
-    pub folder: String,
+    pub folder: PresetFolder,
     pub preview: Option<iced::widget::image::Handle>,
 }
 
@@ -83,34 +127,22 @@ pub fn presets_dir() -> PathBuf {
     data_dir().join("presets")
 }
 
-/// Path to a file inside a saved preset folder.
-pub fn preset_file_path(folder: &str, file: &str) -> PathBuf {
-    presets_dir().join(folder).join(file)
+/// Path to a validated file inside a saved preset folder.
+fn preset_file_path(folder: &PresetFolder, asset: &PresetAsset) -> PathBuf {
+    folder.path().join(asset.as_str())
 }
 
 /// Return the last preset folder recorded by the app, if it still exists.
-pub fn last_used_folder() -> Option<String> {
+pub fn last_used_folder() -> Option<PresetFolder> {
     let folder = read_last_used_folder()?;
-    if is_hidden_or_internal_folder(&folder) {
-        return None;
-    }
-
-    presets_dir()
-        .join(&folder)
-        .join("preset.json")
-        .exists()
-        .then_some(folder)
+    folder.path().join("preset.json").exists().then_some(folder)
 }
 
 /// Best-effort persistence for the last preset folder.
-pub fn remember_last_used(folder: &str) {
-    if folder.is_empty() {
-        return;
-    }
-
+pub fn remember_last_used(folder: &PresetFolder) {
     let dir = data_dir();
     let data = LastPresetData {
-        folder: folder.to_string(),
+        folder: folder.as_str().to_string(),
     };
     let Ok(json) = serde_json::to_string_pretty(&data) else {
         return;
@@ -121,16 +153,16 @@ pub fn remember_last_used(folder: &str) {
 }
 
 /// Clear the last-used pointer if it references the given preset folder.
-pub fn forget_last_used_if(folder: &str) {
-    if read_last_used_folder().as_deref() == Some(folder) {
+pub fn forget_last_used_if(folder: &PresetFolder) {
+    if read_last_used_folder().as_ref() == Some(folder) {
         let _ = fs::remove_file(data_dir().join(LAST_PRESET_FILE));
     }
 }
 
-fn read_last_used_folder() -> Option<String> {
+fn read_last_used_folder() -> Option<PresetFolder> {
     let json = fs::read_to_string(data_dir().join(LAST_PRESET_FILE)).ok()?;
     let data: LastPresetData = serde_json::from_str(&json).ok()?;
-    (!data.folder.is_empty()).then_some(data.folder)
+    PresetFolder::parse(data.folder)
 }
 
 fn data_dir() -> PathBuf {
@@ -194,25 +226,29 @@ pub fn validate_name(name: &str) -> Result<(), &'static str> {
 /// - `data`: the preset configuration
 pub fn save(
     name: &str,
-    folder_override: Option<&str>,
+    folder_override: Option<&PresetFolder>,
     source_image_path: Option<&Path>,
     preview_rgba: &RgbaImage,
     data: &PresetData,
-) -> Result<String, String> {
+) -> Result<PresetFolder, String> {
     let dir = presets_dir();
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create presets dir: {e}"))?;
 
-    let folder_name = folder_override.map(|s| s.to_string()).unwrap_or_else(|| {
-        let base = sanitize_folder_name(name);
-        // Ensure unique folder name
-        let mut candidate = base.clone();
-        let mut n = 1;
-        while dir.join(&candidate).exists() {
-            n += 1;
-            candidate = format!("{base}-{n}");
-        }
-        candidate
-    });
+    let folder_name = folder_override
+        .map(|folder| folder.as_str().to_string())
+        .unwrap_or_else(|| {
+            let base = sanitize_folder_name(name);
+            // Ensure unique folder name
+            let mut candidate = base.clone();
+            let mut n = 1;
+            while dir.join(&candidate).exists() {
+                n += 1;
+                candidate = format!("{base}-{n}");
+            }
+            candidate
+        });
+    let folder = PresetFolder::parse(folder_name.clone())
+        .ok_or_else(|| "Preset folder name is not safe".to_string())?;
 
     let preset_dir = dir.join(&folder_name);
     let staged_dir = unique_staging_dir(&dir, &folder_name);
@@ -225,7 +261,7 @@ pub fn save(
         let _ = fs::remove_dir_all(&staged_dir);
     }
 
-    result.map(|()| folder_name)
+    result.map(|()| folder)
 }
 
 fn write_preset_contents(
@@ -237,7 +273,9 @@ fn write_preset_contents(
     if let Some(src) = source_image_path {
         if src.exists() {
             let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("png");
-            let dest = preset_dir.join(format!("background.{ext}"));
+            let asset = PresetAsset::parse(format!("background.{ext}"))
+                .ok_or_else(|| "Background file name is not safe".to_string())?;
+            let dest = preset_dir.join(asset.as_str());
             fs::copy(src, &dest).map_err(|e| format!("Failed to copy background: {e}"))?;
         }
     }
@@ -361,6 +399,23 @@ fn is_hidden_or_internal_folder(folder: &str) -> bool {
     folder.starts_with('.') || is_internal_folder(folder)
 }
 
+fn is_valid_preset_folder(folder: &str) -> bool {
+    is_safe_path_segment(folder) && !is_hidden_or_internal_folder(folder)
+}
+
+fn is_valid_preset_asset(asset: &str) -> bool {
+    is_safe_path_segment(asset) && !asset.starts_with('.')
+}
+
+fn is_safe_path_segment(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && !value.contains('/')
+        && !value.contains('\\')
+        && !value.contains('\0')
+}
+
 fn is_internal_folder(folder: &str) -> bool {
     folder.starts_with('.') && (folder.contains(STAGING_MARKER) || folder.contains(BACKUP_MARKER))
 }
@@ -434,9 +489,9 @@ pub fn list() -> Vec<PresetEntry> {
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_string();
-        if is_hidden_or_internal_folder(&folder) {
+        let Some(folder) = PresetFolder::parse(folder) else {
             continue;
-        }
+        };
         let config_path = path.join("preset.json");
         if !config_path.exists() {
             continue;
@@ -446,7 +501,7 @@ pub fn list() -> Vec<PresetEntry> {
             .ok()
             .and_then(|s| serde_json::from_str::<PresetData>(&s).ok())
             .map(|d| d.name)
-            .unwrap_or_else(|| folder.clone());
+            .unwrap_or_else(|| folder.as_str().to_string());
 
         let preview_path = path.join("preview.png");
         let preview = if preview_path.exists() {
@@ -467,8 +522,8 @@ pub fn list() -> Vec<PresetEntry> {
 }
 
 /// Load a preset's config from disk.
-pub fn load(folder: &str) -> Result<(PresetData, Option<PathBuf>), String> {
-    let preset_dir = presets_dir().join(folder);
+pub fn load(folder: &PresetFolder) -> Result<LoadedPreset, String> {
+    let preset_dir = folder.path();
     let config_path = preset_dir.join("preset.json");
 
     let json =
@@ -476,15 +531,25 @@ pub fn load(folder: &str) -> Result<(PresetData, Option<PathBuf>), String> {
     let data: PresetData =
         serde_json::from_str(&json).map_err(|e| format!("Failed to parse preset: {e}"))?;
 
-    // Find the background file
-    let bg_path = data.background.as_ref().map(|bg| preset_dir.join(&bg.file));
+    let background_path = data
+        .background
+        .as_ref()
+        .map(|bg| {
+            PresetAsset::parse(bg.file.clone())
+                .map(|asset| preset_file_path(folder, &asset))
+                .ok_or_else(|| "Preset background file name is not safe".to_string())
+        })
+        .transpose()?;
 
-    Ok((data, bg_path))
+    Ok(LoadedPreset {
+        data,
+        background_path,
+    })
 }
 
 /// Delete a preset from disk.
-pub fn delete(folder: &str) -> Result<(), String> {
-    let preset_dir = presets_dir().join(folder);
+pub fn delete(folder: &PresetFolder) -> Result<(), String> {
+    let preset_dir = folder.path();
     if preset_dir.exists() {
         fs::remove_dir_all(&preset_dir).map_err(|e| format!("Failed to delete preset: {e}"))?;
     }
@@ -502,6 +567,24 @@ mod tests {
         assert!(is_hidden_or_internal_folder(".demo.backup.123"));
         assert!(is_hidden_or_internal_folder(".hidden"));
         assert!(!is_hidden_or_internal_folder("demo"));
+    }
+
+    #[test]
+    fn preset_folder_rejects_path_like_names() {
+        assert!(PresetFolder::parse("demo").is_some());
+        assert!(PresetFolder::parse("nested/demo").is_none());
+        assert!(PresetFolder::parse("../demo").is_none());
+        assert!(PresetFolder::parse("demo\\backup").is_none());
+        assert!(PresetFolder::parse(".hidden").is_none());
+        assert!(PresetFolder::parse(".demo.staging.1").is_none());
+    }
+
+    #[test]
+    fn preset_asset_rejects_path_like_names() {
+        assert!(PresetAsset::parse("background.png").is_some());
+        assert!(PresetAsset::parse("../background.png").is_none());
+        assert!(PresetAsset::parse("nested/background.png").is_none());
+        assert!(PresetAsset::parse(".secret").is_none());
     }
 
     #[test]

@@ -81,13 +81,13 @@ struct CoolCooler {
     preview: Option<iced::widget::image::Handle>,
 
     // Presets
-    current_preset_folder: Option<String>,
+    current_preset_folder: Option<preset::PresetFolder>,
     current_preset_name: Option<String>,
     show_save_dialog: bool,
     show_load_dialog: bool,
     save_name_input: String,
     preset_list: Vec<preset::PresetEntry>,
-    last_preset_click: Option<(String, Instant)>,
+    last_preset_click: Option<(preset::PresetFolder, Instant)>,
 
     status_message: String,
     display: DisplayController,
@@ -125,13 +125,14 @@ enum Message {
     SaveNameChanged(String),
     SavePreset,
     SavePresetAs,
-    LoadLastPreset(String),
-    PresetClicked(String),
-    DeletePreset(String),
+    LoadLastPreset(preset::PresetFolder),
+    PresetClicked(preset::PresetFolder),
+    DeletePreset(preset::PresetFolder),
     PresetSourceLoaded {
         result: Result<LoadedData, String>,
         data: preset::PresetData,
-        folder: String,
+        folder: preset::PresetFolder,
+        background_path: Option<PathBuf>,
         silent: bool,
     },
     ToggleTheme,
@@ -312,8 +313,11 @@ impl CoolCooler {
         skipped_widgets
     }
 
-    fn load_preset_folder(&mut self, folder: String, silent: bool) -> Task<Message> {
-        let (data, bg_path) = match preset::load(&folder) {
+    fn load_preset_folder(&mut self, folder: preset::PresetFolder, silent: bool) -> Task<Message> {
+        let preset::LoadedPreset {
+            data,
+            background_path,
+        } = match preset::load(&folder) {
             Ok(loaded) => loaded,
             Err(e) => {
                 if !silent {
@@ -323,7 +327,7 @@ impl CoolCooler {
             }
         };
 
-        if let Some(path) = bg_path {
+        if let Some(path) = background_path {
             if !path.exists() {
                 if !silent {
                     self.status_message = "Load failed: background file missing".to_string();
@@ -348,20 +352,22 @@ impl CoolCooler {
                     result,
                     data,
                     folder,
+                    background_path: Some(path),
                     silent,
                 },
             );
         }
 
-        self.apply_loaded_preset(folder, data, None, silent);
+        self.apply_loaded_preset(folder, data, None, None, silent);
         Task::none()
     }
 
     fn apply_loaded_preset(
         &mut self,
-        folder: String,
+        folder: preset::PresetFolder,
         data: preset::PresetData,
         loaded_source: Option<LoadedData>,
+        background_path: Option<PathBuf>,
         silent: bool,
     ) {
         let name = data.name.clone();
@@ -371,9 +377,7 @@ impl CoolCooler {
             self.filename = filename;
             self.source_frames = frames;
 
-            if let Some(bg) = data.background.as_ref() {
-                self.selected_path = Some(preset::preset_file_path(&folder, &bg.file));
-            }
+            self.selected_path = background_path;
         } else {
             self.source_frames.clear();
             self.selected_path = None;
@@ -579,7 +583,7 @@ impl CoolCooler {
                     let composited = self.render_composited();
                     match preset::save(
                         &name,
-                        self.current_preset_folder.as_deref(),
+                        self.current_preset_folder.as_ref(),
                         self.selected_path.as_deref(),
                         &composited,
                         &data,
@@ -664,12 +668,19 @@ impl CoolCooler {
                 result,
                 data,
                 folder,
+                background_path,
                 silent,
             } => {
                 self.loading = false;
                 match result {
                     Ok(loaded) => {
-                        self.apply_loaded_preset(folder, data, Some(loaded), silent);
+                        self.apply_loaded_preset(
+                            folder,
+                            data,
+                            Some(loaded),
+                            background_path,
+                            silent,
+                        );
                     }
                     Err(e) => {
                         if !silent {
@@ -685,7 +696,7 @@ impl CoolCooler {
                     preset::forget_last_used_if(&folder);
                     self.preset_list = preset::list();
                     // If we deleted the current preset, clear all tracking
-                    if self.current_preset_folder.as_deref() == Some(&folder) {
+                    if self.current_preset_folder.as_ref() == Some(&folder) {
                         self.current_preset_folder = None;
                         self.current_preset_name = None;
                         self.selected_path = None;
