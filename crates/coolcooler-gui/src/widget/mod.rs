@@ -32,23 +32,69 @@ pub struct WidgetContext {
     pub sysinfo: sysinfo_backend::SysInfoData,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct WidgetCapabilities {
-    pub color: bool,
-    pub font: bool,
-    pub text: bool,
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum WidgetConfig {
+    Text(TextWidgetConfig),
+    Circle(CircleWidgetConfig),
+    Color(ColorWidgetConfig),
+    #[default]
+    None,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct WidgetSettings {
+impl WidgetConfig {
+    pub fn color(&self) -> Option<[u8; 4]> {
+        match self {
+            Self::Text(config) => Some(config.color),
+            Self::Circle(config) => Some(config.color),
+            Self::Color(config) => Some(config.color),
+            Self::None => None,
+        }
+    }
+
+    pub fn font_name(&self) -> Option<&str> {
+        match self {
+            Self::Text(config) => Some(&config.font_name),
+            _ => None,
+        }
+    }
+
+    pub fn editable_text(&self) -> Option<&str> {
+        match self {
+            Self::Text(config) => config.text.as_deref(),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextWidgetConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub color: Option<[u8; 4]>,
-    #[serde(rename = "font", skip_serializing_if = "Option::is_none")]
-    pub font_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thickness: Option<u32>,
+    pub color: [u8; 4],
+    #[serde(rename = "font")]
+    pub font_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ColorWidgetConfig {
+    pub color: [u8; 4],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CircleWidgetConfig {
+    pub color: [u8; 4],
+    pub thickness: u32,
+}
+
+#[derive(Debug, Clone)]
+pub enum WidgetEdit {
+    Color([u8; 4]),
+    Font(String),
+    Text(String),
 }
 
 /// Trait for LCD canvas widgets.
@@ -76,15 +122,13 @@ pub trait LcdWidget: fmt::Debug + Send {
         false
     }
 
-    fn capabilities(&self) -> WidgetCapabilities {
-        WidgetCapabilities::default()
+    fn config(&self) -> WidgetConfig {
+        WidgetConfig::None
     }
 
-    fn settings(&self) -> WidgetSettings {
-        WidgetSettings::default()
-    }
+    fn apply_config(&mut self, _config: &WidgetConfig) {}
 
-    fn apply_settings(&mut self, _settings: &WidgetSettings) {}
+    fn apply_edit(&mut self, _edit: WidgetEdit) {}
 }
 
 pub type WidgetFactory = fn() -> Box<dyn LcdWidget>;
@@ -233,4 +277,48 @@ pub fn categories(catalog: &[WidgetSpec]) -> Vec<&'static str> {
         }
     }
     cats
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn text_widget_config_keeps_existing_preset_shape() {
+        let config = WidgetConfig::Text(TextWidgetConfig {
+            text: Some("Label".to_string()),
+            color: [255, 255, 255, 255],
+            font_name: "default".to_string(),
+        });
+
+        let value = serde_json::to_value(&config).unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "text": "Label",
+                "color": [255, 255, 255, 255],
+                "font": "default"
+            })
+        );
+
+        let parsed: WidgetConfig = serde_json::from_value(value).unwrap();
+        assert!(matches!(parsed, WidgetConfig::Text(_)));
+    }
+
+    #[test]
+    fn widget_config_variants_deserialize_by_shape() {
+        let color: WidgetConfig = serde_json::from_value(json!({
+            "color": [80, 255, 80, 255]
+        }))
+        .unwrap();
+        assert!(matches!(color, WidgetConfig::Color(_)));
+
+        let circle: WidgetConfig = serde_json::from_value(json!({
+            "color": [0, 180, 255, 220],
+            "thickness": 3
+        }))
+        .unwrap();
+        assert!(matches!(circle, WidgetConfig::Circle(_)));
+    }
 }

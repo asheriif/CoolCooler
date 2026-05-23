@@ -2,7 +2,7 @@ use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use image::{Rgba, RgbaImage};
 use imageproc::drawing::draw_text_mut;
 
-use super::{fonts, WidgetSettings};
+use super::{fonts, TextWidgetConfig, WidgetConfig, WidgetEdit};
 
 #[derive(Debug, Clone)]
 pub(super) struct TextState {
@@ -39,26 +39,39 @@ impl TextState {
         img
     }
 
-    pub(super) fn settings(&self, include_text: bool) -> WidgetSettings {
-        WidgetSettings {
+    pub(super) fn config(&self, include_text: bool) -> WidgetConfig {
+        WidgetConfig::Text(TextWidgetConfig {
             text: include_text.then(|| self.text.clone()),
-            color: Some(self.color),
-            font_name: Some(self.font_name.clone()),
-            thickness: None,
+            color: self.color,
+            font_name: self.font_name.clone(),
+        })
+    }
+
+    pub(super) fn apply_config(&mut self, config: &WidgetConfig, allow_text: bool) {
+        if let WidgetConfig::Text(config) = config {
+            if allow_text {
+                if let Some(text) = config.text.as_ref() {
+                    self.text = text.clone();
+                }
+            }
+            self.color = config.color;
+            self.font_name = config.font_name.clone();
         }
     }
 
-    pub(super) fn apply_settings(&mut self, settings: &WidgetSettings, allow_text: bool) {
-        if allow_text {
-            if let Some(text) = settings.text.as_ref() {
-                self.text = text.clone();
+    pub(super) fn apply_edit(&mut self, edit: WidgetEdit, allow_text: bool) {
+        match edit {
+            WidgetEdit::Color(color) => {
+                self.color = color;
             }
-        }
-        if let Some(color) = settings.color {
-            self.color = color;
-        }
-        if let Some(font_name) = settings.font_name.as_ref() {
-            self.font_name = font_name.clone();
+            WidgetEdit::Font(font_name) => {
+                self.font_name = font_name;
+            }
+            WidgetEdit::Text(text) => {
+                if allow_text {
+                    self.text = text;
+                }
+            }
         }
     }
 

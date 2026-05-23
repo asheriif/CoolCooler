@@ -2,7 +2,10 @@ use image::{Rgba, RgbaImage};
 use imageproc::drawing::{draw_filled_circle_mut, draw_hollow_circle_mut};
 
 use super::text::TextState;
-use super::{LcdWidget, WidgetCapabilities, WidgetContext, WidgetDescriptor, WidgetSettings};
+use super::{
+    CircleWidgetConfig, ColorWidgetConfig, LcdWidget, WidgetConfig, WidgetContext,
+    WidgetDescriptor, WidgetEdit,
+};
 
 // =============================================================================
 // Free Text
@@ -36,20 +39,16 @@ impl LcdWidget for FreeText {
         self.text.render(width, height, 0.7)
     }
 
-    fn capabilities(&self) -> WidgetCapabilities {
-        WidgetCapabilities {
-            color: true,
-            font: true,
-            text: true,
-        }
+    fn config(&self) -> WidgetConfig {
+        self.text.config(true)
     }
 
-    fn settings(&self) -> WidgetSettings {
-        self.text.settings(true)
+    fn apply_config(&mut self, config: &WidgetConfig) {
+        self.text.apply_config(config, true);
     }
 
-    fn apply_settings(&mut self, settings: &WidgetSettings) {
-        self.text.apply_settings(settings, true);
+    fn apply_edit(&mut self, edit: WidgetEdit) {
+        self.text.apply_edit(edit, true);
     }
 }
 
@@ -94,22 +93,18 @@ impl LcdWidget for HorizontalLine {
         img
     }
 
-    fn capabilities(&self) -> WidgetCapabilities {
-        WidgetCapabilities {
-            color: true,
-            ..Default::default()
+    fn config(&self) -> WidgetConfig {
+        WidgetConfig::Color(ColorWidgetConfig { color: self.color })
+    }
+
+    fn apply_config(&mut self, config: &WidgetConfig) {
+        if let WidgetConfig::Color(config) = config {
+            self.color = config.color;
         }
     }
 
-    fn settings(&self) -> WidgetSettings {
-        WidgetSettings {
-            color: Some(self.color),
-            ..Default::default()
-        }
-    }
-
-    fn apply_settings(&mut self, settings: &WidgetSettings) {
-        if let Some(color) = settings.color {
+    fn apply_edit(&mut self, edit: WidgetEdit) {
+        if let WidgetEdit::Color(color) = edit {
             self.color = color;
         }
     }
@@ -156,22 +151,18 @@ impl LcdWidget for VerticalLine {
         img
     }
 
-    fn capabilities(&self) -> WidgetCapabilities {
-        WidgetCapabilities {
-            color: true,
-            ..Default::default()
+    fn config(&self) -> WidgetConfig {
+        WidgetConfig::Color(ColorWidgetConfig { color: self.color })
+    }
+
+    fn apply_config(&mut self, config: &WidgetConfig) {
+        if let WidgetConfig::Color(config) = config {
+            self.color = config.color;
         }
     }
 
-    fn settings(&self) -> WidgetSettings {
-        WidgetSettings {
-            color: Some(self.color),
-            ..Default::default()
-        }
-    }
-
-    fn apply_settings(&mut self, settings: &WidgetSettings) {
-        if let Some(color) = settings.color {
+    fn apply_edit(&mut self, edit: WidgetEdit) {
+        if let WidgetEdit::Color(color) = edit {
             self.color = color;
         }
     }
@@ -229,27 +220,23 @@ impl LcdWidget for CircleGauge {
         img
     }
 
-    fn capabilities(&self) -> WidgetCapabilities {
-        WidgetCapabilities {
-            color: true,
-            ..Default::default()
+    fn config(&self) -> WidgetConfig {
+        WidgetConfig::Circle(CircleWidgetConfig {
+            color: self.color,
+            thickness: self.thickness,
+        })
+    }
+
+    fn apply_config(&mut self, config: &WidgetConfig) {
+        if let WidgetConfig::Circle(config) = config {
+            self.color = config.color;
+            self.thickness = config.thickness;
         }
     }
 
-    fn settings(&self) -> WidgetSettings {
-        WidgetSettings {
-            color: Some(self.color),
-            thickness: Some(self.thickness),
-            ..Default::default()
-        }
-    }
-
-    fn apply_settings(&mut self, settings: &WidgetSettings) {
-        if let Some(color) = settings.color {
+    fn apply_edit(&mut self, edit: WidgetEdit) {
+        if let WidgetEdit::Color(color) = edit {
             self.color = color;
-        }
-        if let Some(thickness) = settings.thickness {
-            self.thickness = thickness;
         }
     }
 }
@@ -296,22 +283,18 @@ impl LcdWidget for FilledCircle {
         img
     }
 
-    fn capabilities(&self) -> WidgetCapabilities {
-        WidgetCapabilities {
-            color: true,
-            ..Default::default()
+    fn config(&self) -> WidgetConfig {
+        WidgetConfig::Color(ColorWidgetConfig { color: self.color })
+    }
+
+    fn apply_config(&mut self, config: &WidgetConfig) {
+        if let WidgetConfig::Color(config) = config {
+            self.color = config.color;
         }
     }
 
-    fn settings(&self) -> WidgetSettings {
-        WidgetSettings {
-            color: Some(self.color),
-            ..Default::default()
-        }
-    }
-
-    fn apply_settings(&mut self, settings: &WidgetSettings) {
-        if let Some(color) = settings.color {
+    fn apply_edit(&mut self, edit: WidgetEdit) {
+        if let WidgetEdit::Color(color) = edit {
             self.color = color;
         }
     }

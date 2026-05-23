@@ -257,26 +257,17 @@ fn widget_config_card<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Option<Eleme
 
     app.canvas.layers.iter().find(|l| l.id == id).map(|layer| {
         let opacity_val = layer.opacity as f32 / 255.0;
-        let capabilities = layer.widget.capabilities();
-        let settings = layer.widget.settings();
+        let config = layer.widget.config();
         let mut config_items = column![opacity_control(opacity_val, c)].spacing(8);
 
-        if capabilities.color {
-            config_items = config_items.push(color_controls(
-                settings.color.unwrap_or([255, 255, 255, 255]),
-                c,
-            ));
+        if let Some(color) = config.color() {
+            config_items = config_items.push(color_controls(color, c));
         }
-        if capabilities.font {
-            let current_font = settings
-                .font_name
-                .clone()
-                .unwrap_or_else(|| widget::fonts::DEFAULT_FONT.to_string());
-            config_items = config_items.push(font_control(current_font, c));
+        if let Some(font_name) = config.font_name() {
+            config_items = config_items.push(font_control(font_name.to_string(), c));
         }
-        if capabilities.text {
-            config_items =
-                config_items.push(text_control(settings.text.clone().unwrap_or_default(), c));
+        if let Some(text) = config.editable_text() {
+            config_items = config_items.push(text_control(text.to_string(), c));
         }
 
         card(config_items, c).into()

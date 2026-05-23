@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use image::{codecs::png::PngEncoder, ImageEncoder, RgbaImage};
 use serde::{Deserialize, Serialize};
 
-use crate::widget::WidgetSettings;
+use crate::widget::WidgetConfig;
 
 const APP_DIR_NAME: &str = "coolcooler";
 const LAST_PRESET_FILE: &str = "last_preset.json";
@@ -44,7 +44,7 @@ pub struct WidgetLayerData {
     pub position: (i32, i32),
     pub size: (u32, u32),
     pub opacity: u8,
-    pub config: WidgetSettings,
+    pub config: WidgetConfig,
 }
 
 /// Summary of a saved preset for the load grid.

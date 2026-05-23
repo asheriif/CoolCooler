@@ -25,7 +25,7 @@ use image::{DynamicImage, Rgba, RgbaImage};
 use rendering::{circular_preview_from_rgba, render_base_rgba};
 use source::{load_source_data, LoadedData, SourceFrame};
 use style::{AppColors, DARK, LIGHT};
-use widget::{sysinfo_backend::SysInfoBackend, WidgetContext, WidgetSpec};
+use widget::{sysinfo_backend::SysInfoBackend, WidgetContext, WidgetEdit, WidgetSpec};
 use windowing::{app_window_settings, ensure_single_instance, pick_file};
 
 /// Layer option for the pick_list dropdown.
@@ -263,6 +263,15 @@ impl CoolCooler {
         self.preview = Some(circular_preview_from_rgba(composited));
     }
 
+    fn edit_active_widget(&mut self, edit: WidgetEdit) {
+        if let LayerSelection::Widget(id) = self.canvas.active_layer {
+            if let Some(layer) = self.canvas.layers.iter_mut().find(|l| l.id == id) {
+                layer.widget.apply_edit(edit);
+                self.commit_frame();
+            }
+        }
+    }
+
     /// Build a PresetData from the current app state.
     fn build_preset_data(&self, name: &str) -> preset::PresetData {
         let bg = self.selected_path.as_ref().map(|p| {
@@ -281,7 +290,7 @@ impl CoolCooler {
                 position: layer.position,
                 size: layer.size,
                 opacity: layer.opacity,
-                config: layer.widget.settings(),
+                config: layer.widget.config(),
             })
             .collect();
 
@@ -311,7 +320,7 @@ impl CoolCooler {
         for wd in &data.widgets {
             if let Some(spec) = widget::spec_by_type_id(&wd.type_id) {
                 let mut w = spec.create();
-                w.apply_settings(&wd.config);
+                w.apply_config(&wd.config);
                 let id = widget::WidgetId(self.canvas.next_id());
                 self.canvas.layers.push(canvas::WidgetLayer {
                     id,
@@ -703,34 +712,13 @@ impl CoolCooler {
                 }
             }
             Message::SetWidgetTextColor(color) => {
-                if let LayerSelection::Widget(id) = self.canvas.active_layer {
-                    if let Some(layer) = self.canvas.layers.iter_mut().find(|l| l.id == id) {
-                        let mut settings = layer.widget.settings();
-                        settings.color = Some(color);
-                        layer.widget.apply_settings(&settings);
-                        self.commit_frame();
-                    }
-                }
+                self.edit_active_widget(WidgetEdit::Color(color));
             }
             Message::SetWidgetFont(name) => {
-                if let LayerSelection::Widget(id) = self.canvas.active_layer {
-                    if let Some(layer) = self.canvas.layers.iter_mut().find(|l| l.id == id) {
-                        let mut settings = layer.widget.settings();
-                        settings.font_name = Some(name);
-                        layer.widget.apply_settings(&settings);
-                        self.commit_frame();
-                    }
-                }
+                self.edit_active_widget(WidgetEdit::Font(name));
             }
             Message::SetWidgetText(text) => {
-                if let LayerSelection::Widget(id) = self.canvas.active_layer {
-                    if let Some(layer) = self.canvas.layers.iter_mut().find(|l| l.id == id) {
-                        let mut settings = layer.widget.settings();
-                        settings.text = Some(text);
-                        layer.widget.apply_settings(&settings);
-                        self.commit_frame();
-                    }
-                }
+                self.edit_active_widget(WidgetEdit::Text(text));
             }
             Message::ShowSaveDialog => {
                 if self.current_preset_name.is_some() {
