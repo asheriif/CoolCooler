@@ -1,141 +1,45 @@
-use std::collections::HashMap;
+mod names;
+mod recovery;
+mod schema;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use image::{codecs::png::PngEncoder, ImageEncoder, RgbaImage};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+
+pub use names::validate_name;
+pub use schema::{
+    BackgroundData, LoadedPreset, PresetData, PresetEntry, PresetFolder, ViewportData,
+    WidgetLayerData,
+};
+
+use names::sanitize_folder_name;
+use schema::{LastPresetData, PresetAsset};
 
 const APP_DIR_NAME: &str = "coolcooler";
 const LAST_PRESET_FILE: &str = "last_preset.json";
-const STAGING_MARKER: &str = ".staging.";
-const BACKUP_MARKER: &str = ".backup.";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InternalPresetKind {
-    Staging,
-    Backup,
-}
-
-impl InternalPresetKind {
-    fn recovery_priority(self) -> u8 {
-        match self {
-            Self::Staging => 1,
-            Self::Backup => 0,
-        }
-    }
-}
-
-#[derive(Debug)]
-struct InternalPresetDir {
-    path: PathBuf,
-    folder_name: String,
-    kind: InternalPresetKind,
-    valid: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct LastPresetData {
-    folder: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct PresetFolder(String);
-
-impl PresetFolder {
-    pub fn parse(folder: impl Into<String>) -> Option<Self> {
-        let folder = folder.into();
-        is_valid_preset_folder(&folder).then_some(Self(folder))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    fn path(&self) -> PathBuf {
-        presets_dir().join(&self.0)
-    }
-}
-
-impl std::fmt::Display for PresetFolder {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct PresetAsset(String);
-
-impl PresetAsset {
-    fn parse(asset: impl Into<String>) -> Option<Self> {
-        let asset = asset.into();
-        is_valid_preset_asset(&asset).then_some(Self(asset))
-    }
-
-    fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct LoadedPreset {
-    pub data: PresetData,
-    pub background_path: Option<PathBuf>,
-}
-
-/// On-disk preset data.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PresetData {
-    pub version: u32,
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub background: Option<BackgroundData>,
-    pub viewport: ViewportData,
-    pub widgets: Vec<WidgetLayerData>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BackgroundData {
-    pub file: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ViewportData {
-    pub zoom: f32,
-    pub pan: (f32, f32),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WidgetLayerData {
-    pub type_id: String,
-    pub position: (i32, i32),
-    pub size: (u32, u32),
-    pub opacity: u8,
-    pub config: Value,
-}
-
-/// Summary of a saved preset for the load grid.
-#[derive(Debug, Clone)]
-pub struct PresetEntry {
-    pub name: String,
-    pub folder: PresetFolder,
-    pub preview: Option<iced::widget::image::Handle>,
-}
 
 /// Root directory for all presets.
 pub fn presets_dir() -> PathBuf {
     data_dir().join("presets")
 }
 
+fn preset_folder_path(folder: &PresetFolder) -> PathBuf {
+    presets_dir().join(folder.as_str())
+}
+
 /// Path to a validated file inside a saved preset folder.
 fn preset_file_path(folder: &PresetFolder, asset: &PresetAsset) -> PathBuf {
-    folder.path().join(asset.as_str())
+    preset_folder_path(folder).join(asset.as_str())
 }
 
 /// Return the last preset folder recorded by the app, if it still exists.
 pub fn last_used_folder() -> Option<PresetFolder> {
     let folder = read_last_used_folder()?;
-    folder.path().join("preset.json").exists().then_some(folder)
+    preset_folder_path(&folder)
+        .join("preset.json")
+        .exists()
+        .then_some(folder)
 }
 
 /// Best-effort persistence for the last preset folder.
@@ -187,36 +91,6 @@ fn env_path(name: &str) -> Option<PathBuf> {
     Some(PathBuf::from(value))
 }
 
-/// Sanitize a display name to a safe folder name.
-fn sanitize_folder_name(name: &str) -> String {
-    name.to_lowercase()
-        .chars()
-        .map(|c| match c {
-            'a'..='z' | '0'..='9' | '-' | '_' => c,
-            ' ' => '-',
-            _ => '_',
-        })
-        .collect::<String>()
-        .trim_matches(|c| c == '-' || c == '_')
-        .to_string()
-}
-
-/// Validate a preset name: non-empty, reasonable length, produces a valid folder name.
-pub fn validate_name(name: &str) -> Result<(), &'static str> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return Err("Name cannot be empty");
-    }
-    if trimmed.len() > 64 {
-        return Err("Name too long (max 64 characters)");
-    }
-    let folder = sanitize_folder_name(trimmed);
-    if folder.is_empty() {
-        return Err("Name must contain at least one letter or number");
-    }
-    Ok(())
-}
-
 /// Save a preset to disk.
 ///
 /// - `name`: display name
@@ -236,22 +110,12 @@ pub fn save(
 
     let folder_name = folder_override
         .map(|folder| folder.as_str().to_string())
-        .unwrap_or_else(|| {
-            let base = sanitize_folder_name(name);
-            // Ensure unique folder name
-            let mut candidate = base.clone();
-            let mut n = 1;
-            while dir.join(&candidate).exists() {
-                n += 1;
-                candidate = format!("{base}-{n}");
-            }
-            candidate
-        });
+        .unwrap_or_else(|| unique_folder_name(&dir, name));
     let folder = PresetFolder::parse(folder_name.clone())
         .ok_or_else(|| "Preset folder name is not safe".to_string())?;
 
     let preset_dir = dir.join(&folder_name);
-    let staged_dir = unique_staging_dir(&dir, &folder_name);
+    let staged_dir = recovery::unique_staging_dir(&dir, &folder_name);
     fs::create_dir(&staged_dir).map_err(|e| format!("Failed to create preset staging dir: {e}"))?;
 
     let result = write_preset_contents(&staged_dir, source_image_path, preview_rgba, data)
@@ -262,6 +126,17 @@ pub fn save(
     }
 
     result.map(|()| folder)
+}
+
+fn unique_folder_name(dir: &Path, name: &str) -> String {
+    let base = sanitize_folder_name(name);
+    let mut candidate = base.clone();
+    let mut n = 1;
+    while dir.join(&candidate).exists() {
+        n += 1;
+        candidate = format!("{base}-{n}");
+    }
+    candidate
 }
 
 fn write_preset_contents(
@@ -301,14 +176,7 @@ fn write_preset_contents(
 }
 
 fn install_staged_preset(staged_dir: &Path, preset_dir: &Path) -> Result<(), String> {
-    let backup_dir = preset_dir.with_file_name(format!(
-        ".{}.backup.{}",
-        preset_dir
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("preset"),
-        unique_suffix()
-    ));
+    let backup_dir = recovery::backup_dir_for(preset_dir);
 
     if preset_dir.exists() {
         fs::rename(preset_dir, &backup_dir)
@@ -329,146 +197,10 @@ fn install_staged_preset(staged_dir: &Path, preset_dir: &Path) -> Result<(), Str
     Ok(())
 }
 
-fn unique_staging_dir(parent: &Path, folder_name: &str) -> PathBuf {
-    parent.join(format!(".{folder_name}.staging.{}", unique_suffix()))
-}
-
-fn unique_suffix() -> String {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
-    format!("{}.{}", std::process::id(), nanos)
-}
-
 /// Best-effort recovery for save staging folders left by an interrupted app run.
 pub fn cleanup_stale_internal_dirs() {
     let dir = presets_dir();
-    cleanup_stale_internal_dirs_in(&dir);
-}
-
-fn cleanup_stale_internal_dirs_in(dir: &Path) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-
-    let mut internal_dirs: HashMap<String, Vec<InternalPresetDir>> = HashMap::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-
-        let Some(folder) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        let Some((live_folder, kind)) = internal_folder_parts(folder) else {
-            continue;
-        };
-        let folder_name = folder.to_string();
-
-        internal_dirs
-            .entry(live_folder.to_string())
-            .or_default()
-            .push(InternalPresetDir {
-                valid: is_valid_preset_dir(&path),
-                path,
-                folder_name,
-                kind,
-            });
-    }
-
-    for (live_folder, candidates) in internal_dirs {
-        let live_dir = dir.join(live_folder);
-        if is_valid_preset_dir(&live_dir) {
-            remove_internal_dirs(candidates.iter());
-            continue;
-        }
-
-        if let Some(recovery_path) = recovery_candidate(&candidates).map(|c| c.path.clone()) {
-            if restore_internal_dir(&recovery_path, &live_dir) {
-                remove_internal_dirs(candidates.iter().filter(|c| c.path != recovery_path));
-            }
-        } else {
-            remove_internal_dirs(candidates.iter());
-        }
-    }
-}
-
-fn is_hidden_or_internal_folder(folder: &str) -> bool {
-    folder.starts_with('.') || is_internal_folder(folder)
-}
-
-fn is_valid_preset_folder(folder: &str) -> bool {
-    is_safe_path_segment(folder) && !is_hidden_or_internal_folder(folder)
-}
-
-fn is_valid_preset_asset(asset: &str) -> bool {
-    is_safe_path_segment(asset) && !asset.starts_with('.')
-}
-
-fn is_safe_path_segment(value: &str) -> bool {
-    !value.is_empty()
-        && value != "."
-        && value != ".."
-        && !value.contains('/')
-        && !value.contains('\\')
-        && !value.contains('\0')
-}
-
-fn is_internal_folder(folder: &str) -> bool {
-    folder.starts_with('.') && (folder.contains(STAGING_MARKER) || folder.contains(BACKUP_MARKER))
-}
-
-fn internal_folder_parts(folder: &str) -> Option<(&str, InternalPresetKind)> {
-    let folder = folder.strip_prefix('.')?;
-    folder
-        .split_once(STAGING_MARKER)
-        .map(|(live_folder, _)| (live_folder, InternalPresetKind::Staging))
-        .or_else(|| {
-            folder
-                .split_once(BACKUP_MARKER)
-                .map(|(live_folder, _)| (live_folder, InternalPresetKind::Backup))
-        })
-        .filter(|(live_folder, _)| !live_folder.is_empty())
-}
-
-fn is_valid_preset_dir(path: &Path) -> bool {
-    path.join("preset.json").is_file()
-}
-
-fn recovery_candidate(candidates: &[InternalPresetDir]) -> Option<&InternalPresetDir> {
-    candidates
-        .iter()
-        .filter(|candidate| candidate.valid)
-        .max_by(|a, b| {
-            a.kind
-                .recovery_priority()
-                .cmp(&b.kind.recovery_priority())
-                .then_with(|| a.folder_name.cmp(&b.folder_name))
-        })
-}
-
-fn restore_internal_dir(recovery_path: &Path, live_dir: &Path) -> bool {
-    if live_dir.exists() && remove_path(live_dir).is_err() {
-        return false;
-    }
-
-    fs::rename(recovery_path, live_dir).is_ok()
-}
-
-fn remove_internal_dirs<'a>(candidates: impl Iterator<Item = &'a InternalPresetDir>) {
-    for candidate in candidates {
-        let _ = fs::remove_dir_all(&candidate.path);
-    }
-}
-
-fn remove_path(path: &Path) -> std::io::Result<()> {
-    if path.is_dir() {
-        fs::remove_dir_all(path)
-    } else {
-        fs::remove_file(path)
-    }
+    recovery::cleanup_stale_internal_dirs(&dir);
 }
 
 /// List all saved presets.
@@ -504,16 +236,12 @@ pub fn list() -> Vec<PresetEntry> {
             .unwrap_or_else(|| folder.as_str().to_string());
 
         let preview_path = path.join("preview.png");
-        let preview = if preview_path.exists() {
-            Some(iced::widget::image::Handle::from_path(&preview_path))
-        } else {
-            None
-        };
+        let preview_path = preview_path.exists().then_some(preview_path);
 
         presets.push(PresetEntry {
             name,
             folder,
-            preview,
+            preview_path,
         });
     }
 
@@ -523,7 +251,7 @@ pub fn list() -> Vec<PresetEntry> {
 
 /// Load a preset's config from disk.
 pub fn load(folder: &PresetFolder) -> Result<LoadedPreset, String> {
-    let preset_dir = folder.path();
+    let preset_dir = preset_folder_path(folder);
     let config_path = preset_dir.join("preset.json");
 
     let json =
@@ -549,121 +277,9 @@ pub fn load(folder: &PresetFolder) -> Result<LoadedPreset, String> {
 
 /// Delete a preset from disk.
 pub fn delete(folder: &PresetFolder) -> Result<(), String> {
-    let preset_dir = folder.path();
+    let preset_dir = preset_folder_path(folder);
     if preset_dir.exists() {
         fs::remove_dir_all(&preset_dir).map_err(|e| format!("Failed to delete preset: {e}"))?;
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn preset_listing_hides_internal_folders() {
-        assert!(is_hidden_or_internal_folder(".demo.staging.123"));
-        assert!(is_hidden_or_internal_folder(".demo.backup.123"));
-        assert!(is_hidden_or_internal_folder(".hidden"));
-        assert!(!is_hidden_or_internal_folder("demo"));
-    }
-
-    #[test]
-    fn preset_folder_rejects_path_like_names() {
-        assert!(PresetFolder::parse("demo").is_some());
-        assert!(PresetFolder::parse("nested/demo").is_none());
-        assert!(PresetFolder::parse("../demo").is_none());
-        assert!(PresetFolder::parse("demo\\backup").is_none());
-        assert!(PresetFolder::parse(".hidden").is_none());
-        assert!(PresetFolder::parse(".demo.staging.1").is_none());
-    }
-
-    #[test]
-    fn preset_asset_rejects_path_like_names() {
-        assert!(PresetAsset::parse("background.png").is_some());
-        assert!(PresetAsset::parse("../background.png").is_none());
-        assert!(PresetAsset::parse("nested/background.png").is_none());
-        assert!(PresetAsset::parse(".secret").is_none());
-    }
-
-    #[test]
-    fn internal_folder_names_map_back_to_live_folder() {
-        assert_eq!(
-            internal_folder_parts(".demo.staging.123").map(|(folder, _)| folder),
-            Some("demo")
-        );
-        assert_eq!(
-            internal_folder_parts(".demo.backup.123").map(|(folder, _)| folder),
-            Some("demo")
-        );
-        assert_eq!(internal_folder_parts("demo"), None);
-    }
-
-    #[test]
-    fn preset_data_keeps_widget_config_raw() {
-        let data: PresetData = serde_json::from_value(json!({
-            "version": 1,
-            "name": "Future preset",
-            "viewport": {
-                "zoom": 1.0,
-                "pan": [0.0, 0.0]
-            },
-            "widgets": [{
-                "type_id": "future_widget",
-                "position": [0, 0],
-                "size": [10, 10],
-                "opacity": 255,
-                "config": {
-                    "future": {
-                        "nested": true
-                    }
-                }
-            }]
-        }))
-        .unwrap();
-
-        assert_eq!(
-            data.widgets[0].config,
-            json!({
-                "future": {
-                    "nested": true
-                }
-            })
-        );
-    }
-
-    #[test]
-    fn cleanup_prefers_staging_over_backup_when_live_folder_is_missing() {
-        let dir = temp_test_dir("staging-over-backup");
-        fs::create_dir_all(dir.join(".demo.backup.1")).unwrap();
-        fs::write(dir.join(".demo.backup.1").join("preset.json"), "old").unwrap();
-        fs::create_dir_all(dir.join(".demo.staging.2")).unwrap();
-        fs::write(dir.join(".demo.staging.2").join("preset.json"), "new").unwrap();
-
-        cleanup_stale_internal_dirs_in(&dir);
-
-        assert_eq!(
-            fs::read_to_string(dir.join("demo").join("preset.json")).unwrap(),
-            "new"
-        );
-        assert!(!dir.join(".demo.backup.1").exists());
-        assert!(!dir.join(".demo.staging.2").exists());
-
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    fn temp_test_dir(name: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "coolcooler-preset-{name}-{}-{nanos}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(&path).unwrap();
-        path
-    }
 }

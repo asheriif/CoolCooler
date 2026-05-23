@@ -558,16 +558,20 @@ fn preset_preview<'a>(
     entry: &'a crate::preset::PresetEntry,
     c: &'a AppColors,
 ) -> Element<'a, Message> {
-    if let Some(ref handle) = entry.preview {
-        return container(iced::widget::image(handle.clone()).width(120).height(120))
-            .style(|_: &Theme| container::Style {
-                border: Border {
-                    radius: 8.0.into(),
-                    ..Default::default()
-                },
+    if let Some(ref path) = entry.preview_path {
+        return container(
+            iced::widget::image(iced::widget::image::Handle::from_path(path))
+                .width(120)
+                .height(120),
+        )
+        .style(|_: &Theme| container::Style {
+            border: Border {
+                radius: 8.0.into(),
                 ..Default::default()
-            })
-            .into();
+            },
+            ..Default::default()
+        })
+        .into();
     }
 
     container(text("No preview").size(10).color(c.text_dim))
