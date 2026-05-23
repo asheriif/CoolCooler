@@ -4,12 +4,12 @@ use std::time::{Duration, Instant};
 use iced::Task;
 
 use crate::canvas::Viewport;
-use crate::source::{load_source_data, LoadedData};
-use crate::{preset, widget, CoolCooler, Message};
+use crate::source::{filename_for_path, load_source_data, LoadedData};
+use crate::{preset, widget, CoolCooler, CurrentPreset, Message};
 
 impl CoolCooler {
     pub(crate) fn build_preset_data(&self, name: &str) -> preset::PresetData {
-        let bg = self.selected_path.as_ref().map(|p| {
+        let bg = self.source.path().map(|p| {
             let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("png");
             preset::BackgroundData {
                 file: format!("background.{ext}"),
@@ -94,13 +94,10 @@ impl CoolCooler {
                 return Task::none();
             }
 
-            let filename = path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
+            let filename = filename_for_path(&path);
             let path_clone = path.clone();
 
-            self.loading = true;
+            self.source.set_loading(true);
             if !silent {
                 self.status_message = "Loading preset...".to_string();
             }
@@ -132,20 +129,15 @@ impl CoolCooler {
         let name = data.name.clone();
 
         if let Some(loaded) = loaded_source {
-            let (frames, filename) = loaded.into_parts();
-            self.filename = filename;
-            self.source_frames = frames;
-            self.selected_path = background_path;
+            self.source.replace_with_loaded(loaded, background_path);
         } else {
-            self.source_frames.clear();
-            self.selected_path = None;
-            self.filename.clear();
+            self.source.clear();
         }
 
-        self.current_preset_folder = Some(folder.clone());
-        self.current_preset_name = Some(name.clone());
-        self.current_frame = 0;
-        self.last_advance = Instant::now();
+        self.current_preset = Some(CurrentPreset {
+            folder: folder.clone(),
+            name: name.clone(),
+        });
         let skipped_widgets = self.apply_preset_config(&data);
         self.start_display();
         preset::remember_last_used(&folder);
@@ -160,19 +152,22 @@ impl CoolCooler {
     }
 
     pub(crate) fn save_requested(&mut self) {
-        if let Some(name) = self.current_preset_name.clone() {
+        if let Some(current) = self.current_preset.clone() {
+            let name = current.name;
             let data = self.build_preset_data(&name);
             let composited = self.render_composited();
             match preset::save(
                 &name,
-                self.current_preset_folder.as_ref(),
-                self.selected_path.as_deref(),
+                Some(&current.folder),
+                self.source.path(),
                 &composited,
                 &data,
             ) {
                 Ok(folder) => {
-                    self.current_preset_folder = Some(folder.clone());
-                    self.current_preset_name = Some(name.clone());
+                    self.current_preset = Some(CurrentPreset {
+                        folder: folder.clone(),
+                        name: name.clone(),
+                    });
                     preset::remember_last_used(&folder);
                     self.status_message = format!("Preset '{name}' saved");
                 }
@@ -193,17 +188,13 @@ impl CoolCooler {
 
         let data = self.build_preset_data(&name);
         let composited = self.render_composited();
-        match preset::save(
-            &name,
-            None,
-            self.selected_path.as_deref(),
-            &composited,
-            &data,
-        ) {
+        match preset::save(&name, None, self.source.path(), &composited, &data) {
             Ok(folder) => {
                 preset::remember_last_used(&folder);
-                self.current_preset_folder = Some(folder);
-                self.current_preset_name = Some(name.clone());
+                self.current_preset = Some(CurrentPreset {
+                    folder,
+                    name: name.clone(),
+                });
                 self.show_save_dialog = false;
                 self.status_message = format!("Preset '{name}' saved");
             }
@@ -236,7 +227,7 @@ impl CoolCooler {
         background_path: Option<PathBuf>,
         silent: bool,
     ) {
-        self.loading = false;
+        self.source.set_loading(false);
         match result {
             Ok(loaded) => {
                 self.apply_loaded_preset(folder, data, Some(loaded), background_path, silent);
@@ -257,10 +248,14 @@ impl CoolCooler {
 
         preset::forget_last_used_if(&folder);
         self.preset_list = preset::list();
-        if self.current_preset_folder.as_ref() == Some(&folder) {
-            self.current_preset_folder = None;
-            self.current_preset_name = None;
-            self.selected_path = None;
+        if self
+            .current_preset
+            .as_ref()
+            .is_some_and(|current| current.folder == folder)
+        {
+            self.current_preset = None;
+            self.source.clear();
+            self.commit_frame();
         }
     }
 }

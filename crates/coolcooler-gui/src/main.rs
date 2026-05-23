@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use canvas::{Canvas, LayerSelection};
 use display_session::DisplayController;
 use iced::{mouse, window, Color, Element, Point, Subscription, Task, Theme};
-use source::{LoadedData, SourceFrame};
+use source::{LoadedData, SourceState};
 use style::{AppColors, DARK, LIGHT};
 use widget::{sysinfo_backend::SysInfoBackend, WidgetContext, WidgetSpec};
 use windowing::{app_window_settings, ensure_single_instance};
@@ -57,16 +57,9 @@ fn main() -> iced::Result {
 
 struct CoolCooler {
     dark_mode: bool,
-    selected_path: Option<PathBuf>,
 
     // Source data
-    source_frames: Vec<SourceFrame>,
-    filename: String,
-    loading: bool,
-
-    // Animation
-    current_frame: usize,
-    last_advance: Instant,
+    source: SourceState,
 
     // Canvas (layers + viewports)
     canvas: Canvas,
@@ -85,8 +78,7 @@ struct CoolCooler {
     preview: Option<iced::widget::image::Handle>,
 
     // Presets
-    current_preset_folder: Option<preset::PresetFolder>,
-    current_preset_name: Option<String>,
+    current_preset: Option<CurrentPreset>,
     show_save_dialog: bool,
     show_load_dialog: bool,
     save_name_input: String,
@@ -100,6 +92,12 @@ struct CoolCooler {
     _tray_handle: tray::TrayHandle,
     tray_rx: Arc<Mutex<std::sync::mpsc::Receiver<tray::TrayEvent>>>,
     window_id: Option<window::Id>,
+}
+
+#[derive(Debug, Clone)]
+struct CurrentPreset {
+    folder: preset::PresetFolder,
+    name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -154,12 +152,7 @@ impl CoolCooler {
 
         let mut app = Self {
             dark_mode: true,
-            selected_path: None,
-            source_frames: Vec::new(),
-            filename: String::new(),
-            loading: false,
-            current_frame: 0,
-            last_advance: Instant::now(),
+            source: SourceState::new(),
             canvas: Canvas::new(),
             dragging: false,
             last_cursor: None,
@@ -168,8 +161,7 @@ impl CoolCooler {
             sysinfo_backend: SysInfoBackend::new(),
             widget_ctx: WidgetContext::default(),
             preview: None,
-            current_preset_folder: None,
-            current_preset_name: None,
+            current_preset: None,
             show_save_dialog: false,
             show_load_dialog: false,
             save_name_input: String::new(),
@@ -228,7 +220,7 @@ impl CoolCooler {
         subs.push(iced::time::every(Duration::from_millis(250)).map(|_| Message::TrayPoll));
 
         // 30ms tick for GIF animation
-        if self.is_animated() {
+        if self.source.is_animated() {
             subs.push(iced::time::every(Duration::from_millis(30)).map(|_| Message::AnimationTick));
         }
 

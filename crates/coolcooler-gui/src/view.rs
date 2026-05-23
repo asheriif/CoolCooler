@@ -341,7 +341,7 @@ fn text_control(current_text: String, c: &AppColors) -> Element<'_, Message> {
 }
 
 fn select_image_button<'a>(app: &CoolCooler, c: &'a AppColors) -> button::Button<'a, Message> {
-    if app.loading {
+    if app.source.is_loading() {
         styled_button("Loading...", ButtonKind::Disabled, c)
     } else {
         styled_button("Select Image", ButtonKind::Default, c).on_press(Message::SelectFile)
@@ -349,7 +349,7 @@ fn select_image_button<'a>(app: &CoolCooler, c: &'a AppColors) -> button::Button
 }
 
 fn preset_buttons<'a>(app: &CoolCooler, c: &'a AppColors) -> Element<'a, Message> {
-    let save_label = if app.current_preset_name.is_some() {
+    let save_label = if app.current_preset.is_some() {
         "Save"
     } else {
         "Save Preset"
@@ -358,7 +358,7 @@ fn preset_buttons<'a>(app: &CoolCooler, c: &'a AppColors) -> Element<'a, Message
         styled_button(save_label, ButtonKind::Default, c).on_press(Message::ShowSaveDialog);
     let mut buttons = row![save_btn].spacing(8);
 
-    if app.current_preset_name.is_some() {
+    if app.current_preset.is_some() {
         buttons = buttons
             .push(styled_button("Save As", ButtonKind::Default, c).on_press(Message::SavePresetAs));
     }

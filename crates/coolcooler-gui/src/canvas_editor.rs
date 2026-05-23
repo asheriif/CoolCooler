@@ -10,13 +10,11 @@ use crate::{CoolCooler, Message};
 
 impl CoolCooler {
     pub(crate) fn source_kind(&self) -> SourceKind {
-        SourceKind::from_frame_count(self.source_frames.len())
+        SourceKind::from_frame_count(self.source.frame_count())
     }
 
     pub(crate) fn current_source_size(&self) -> Option<(u32, u32)> {
-        self.source_frames
-            .get(self.current_frame)
-            .map(|src| (src.rgba.width(), src.rgba.height()))
+        self.source.current_size()
     }
 
     pub(crate) fn canvas_policy(&self) -> CanvasPolicy {
@@ -29,7 +27,7 @@ impl CoolCooler {
 
     pub(crate) fn render_composited(&self) -> RgbaImage {
         let resolution = self.lcd_resolution();
-        let base = if let Some(src) = self.source_frames.get(self.current_frame) {
+        let base = if let Some(src) = self.source.current_frame() {
             let vp = self.canvas.base_viewport();
             render_base_rgba(&src.rgba, resolution, vp.zoom, vp.pan)
         } else {
