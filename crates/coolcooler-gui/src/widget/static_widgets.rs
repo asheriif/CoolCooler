@@ -1,10 +1,9 @@
 use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use image::{Rgba, RgbaImage};
 use imageproc::drawing::{draw_filled_circle_mut, draw_hollow_circle_mut, draw_text_mut};
-use serde_json::{json, Value};
 
 use super::fonts;
-use super::{LcdWidget, WidgetContext, WidgetDescriptor};
+use super::{LcdWidget, WidgetCapabilities, WidgetContext, WidgetDescriptor, WidgetSettings};
 
 // =============================================================================
 // Free Text
@@ -58,64 +57,33 @@ impl LcdWidget for FreeText {
         img
     }
 
-    fn supports_text_color(&self) -> bool {
-        true
-    }
-
-    fn text_color(&self) -> [u8; 4] {
-        self.color
-    }
-
-    fn set_text_color(&mut self, color: [u8; 4]) {
-        self.color = color;
-    }
-
-    fn supports_font(&self) -> bool {
-        true
-    }
-
-    fn font_name(&self) -> &str {
-        &self.font_name
-    }
-
-    fn set_font_name(&mut self, name: String) {
-        self.font_name = name;
-    }
-
-    fn save_config(&self) -> Value {
-        json!({ "text": self.text, "color": self.color, "font": self.font_name })
-    }
-
-    fn load_config(&mut self, config: &Value) {
-        if let Some(t) = config.get("text").and_then(|v| v.as_str()) {
-            self.text = t.to_string();
-        }
-        if let Some(arr) = config.get("color").and_then(|v| v.as_array()) {
-            if arr.len() == 4 {
-                self.color = [
-                    arr[0].as_u64().unwrap_or(255) as u8,
-                    arr[1].as_u64().unwrap_or(255) as u8,
-                    arr[2].as_u64().unwrap_or(255) as u8,
-                    arr[3].as_u64().unwrap_or(255) as u8,
-                ];
-            }
-        }
-        if let Some(f) = config.get("font").and_then(|v| v.as_str()) {
-            self.font_name = f.to_string();
+    fn capabilities(&self) -> WidgetCapabilities {
+        WidgetCapabilities {
+            color: true,
+            font: true,
+            text: true,
         }
     }
 
-    /// Free text has editable content.
-    fn supports_text_edit(&self) -> bool {
-        true
+    fn settings(&self) -> WidgetSettings {
+        WidgetSettings {
+            text: Some(self.text.clone()),
+            color: Some(self.color),
+            font_name: Some(self.font_name.clone()),
+            thickness: None,
+        }
     }
 
-    fn text_content(&self) -> &str {
-        &self.text
-    }
-
-    fn set_text_content(&mut self, text: String) {
-        self.text = text;
+    fn apply_settings(&mut self, settings: &WidgetSettings) {
+        if let Some(text) = settings.text.as_ref() {
+            self.text = text.clone();
+        }
+        if let Some(color) = settings.color {
+            self.color = color;
+        }
+        if let Some(font_name) = settings.font_name.as_ref() {
+            self.font_name = font_name.clone();
+        }
     }
 }
 
@@ -160,32 +128,23 @@ impl LcdWidget for HorizontalLine {
         img
     }
 
-    fn supports_text_color(&self) -> bool {
-        true
+    fn capabilities(&self) -> WidgetCapabilities {
+        WidgetCapabilities {
+            color: true,
+            ..Default::default()
+        }
     }
 
-    fn text_color(&self) -> [u8; 4] {
-        self.color
+    fn settings(&self) -> WidgetSettings {
+        WidgetSettings {
+            color: Some(self.color),
+            ..Default::default()
+        }
     }
 
-    fn set_text_color(&mut self, color: [u8; 4]) {
-        self.color = color;
-    }
-
-    fn save_config(&self) -> Value {
-        json!({ "color": self.color })
-    }
-
-    fn load_config(&mut self, config: &Value) {
-        if let Some(arr) = config.get("color").and_then(|v| v.as_array()) {
-            if arr.len() == 4 {
-                self.color = [
-                    arr[0].as_u64().unwrap_or(255) as u8,
-                    arr[1].as_u64().unwrap_or(255) as u8,
-                    arr[2].as_u64().unwrap_or(255) as u8,
-                    arr[3].as_u64().unwrap_or(200) as u8,
-                ];
-            }
+    fn apply_settings(&mut self, settings: &WidgetSettings) {
+        if let Some(color) = settings.color {
+            self.color = color;
         }
     }
 }
@@ -231,32 +190,23 @@ impl LcdWidget for VerticalLine {
         img
     }
 
-    fn supports_text_color(&self) -> bool {
-        true
+    fn capabilities(&self) -> WidgetCapabilities {
+        WidgetCapabilities {
+            color: true,
+            ..Default::default()
+        }
     }
 
-    fn text_color(&self) -> [u8; 4] {
-        self.color
+    fn settings(&self) -> WidgetSettings {
+        WidgetSettings {
+            color: Some(self.color),
+            ..Default::default()
+        }
     }
 
-    fn set_text_color(&mut self, color: [u8; 4]) {
-        self.color = color;
-    }
-
-    fn save_config(&self) -> Value {
-        json!({ "color": self.color })
-    }
-
-    fn load_config(&mut self, config: &Value) {
-        if let Some(arr) = config.get("color").and_then(|v| v.as_array()) {
-            if arr.len() == 4 {
-                self.color = [
-                    arr[0].as_u64().unwrap_or(255) as u8,
-                    arr[1].as_u64().unwrap_or(255) as u8,
-                    arr[2].as_u64().unwrap_or(255) as u8,
-                    arr[3].as_u64().unwrap_or(200) as u8,
-                ];
-            }
+    fn apply_settings(&mut self, settings: &WidgetSettings) {
+        if let Some(color) = settings.color {
+            self.color = color;
         }
     }
 }
@@ -313,35 +263,27 @@ impl LcdWidget for CircleGauge {
         img
     }
 
-    fn supports_text_color(&self) -> bool {
-        true
-    }
-
-    fn text_color(&self) -> [u8; 4] {
-        self.color
-    }
-
-    fn set_text_color(&mut self, color: [u8; 4]) {
-        self.color = color;
-    }
-
-    fn save_config(&self) -> Value {
-        json!({ "color": self.color, "thickness": self.thickness })
-    }
-
-    fn load_config(&mut self, config: &Value) {
-        if let Some(arr) = config.get("color").and_then(|v| v.as_array()) {
-            if arr.len() == 4 {
-                self.color = [
-                    arr[0].as_u64().unwrap_or(0) as u8,
-                    arr[1].as_u64().unwrap_or(180) as u8,
-                    arr[2].as_u64().unwrap_or(255) as u8,
-                    arr[3].as_u64().unwrap_or(220) as u8,
-                ];
-            }
+    fn capabilities(&self) -> WidgetCapabilities {
+        WidgetCapabilities {
+            color: true,
+            ..Default::default()
         }
-        if let Some(t) = config.get("thickness").and_then(|v| v.as_u64()) {
-            self.thickness = t as u32;
+    }
+
+    fn settings(&self) -> WidgetSettings {
+        WidgetSettings {
+            color: Some(self.color),
+            thickness: Some(self.thickness),
+            ..Default::default()
+        }
+    }
+
+    fn apply_settings(&mut self, settings: &WidgetSettings) {
+        if let Some(color) = settings.color {
+            self.color = color;
+        }
+        if let Some(thickness) = settings.thickness {
+            self.thickness = thickness;
         }
     }
 }
@@ -388,32 +330,23 @@ impl LcdWidget for FilledCircle {
         img
     }
 
-    fn supports_text_color(&self) -> bool {
-        true
+    fn capabilities(&self) -> WidgetCapabilities {
+        WidgetCapabilities {
+            color: true,
+            ..Default::default()
+        }
     }
 
-    fn text_color(&self) -> [u8; 4] {
-        self.color
+    fn settings(&self) -> WidgetSettings {
+        WidgetSettings {
+            color: Some(self.color),
+            ..Default::default()
+        }
     }
 
-    fn set_text_color(&mut self, color: [u8; 4]) {
-        self.color = color;
-    }
-
-    fn save_config(&self) -> Value {
-        json!({ "color": self.color })
-    }
-
-    fn load_config(&mut self, config: &Value) {
-        if let Some(arr) = config.get("color").and_then(|v| v.as_array()) {
-            if arr.len() == 4 {
-                self.color = [
-                    arr[0].as_u64().unwrap_or(255) as u8,
-                    arr[1].as_u64().unwrap_or(255) as u8,
-                    arr[2].as_u64().unwrap_or(255) as u8,
-                    arr[3].as_u64().unwrap_or(200) as u8,
-                ];
-            }
+    fn apply_settings(&mut self, settings: &WidgetSettings) {
+        if let Some(color) = settings.color {
+            self.color = color;
         }
     }
 }

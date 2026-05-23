@@ -1,10 +1,9 @@
 use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use image::{Rgba, RgbaImage};
 use imageproc::drawing::draw_text_mut;
-use serde_json::{json, Value};
 
 use super::fonts;
-use super::{LcdWidget, WidgetContext, WidgetDescriptor};
+use super::{LcdWidget, WidgetCapabilities, WidgetContext, WidgetDescriptor, WidgetSettings};
 
 pub const CPU_USAGE_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
     name: "CPU Usage",
@@ -108,50 +107,30 @@ macro_rules! sysinfo_text_widget {
                 }
             }
 
-            fn supports_text_color(&self) -> bool {
-                true
-            }
-
-            fn text_color(&self) -> [u8; 4] {
-                self.color
-            }
-
-            fn set_text_color(&mut self, color: [u8; 4]) {
-                self.color = color;
-            }
-
-            fn supports_font(&self) -> bool {
-                true
-            }
-
-            fn font_name(&self) -> &str {
-                &self.font_name
-            }
-
-            fn set_font_name(&mut self, name: String) {
-                self.font_name = name;
-            }
-
-            fn save_config(&self) -> Value {
-                json!({ "color": self.color, "font": self.font_name })
-            }
-
-            fn load_config(&mut self, config: &Value) {
-                if let Some(arr) = config.get("color").and_then(|v| v.as_array()) {
-                    if arr.len() == 4 {
-                        self.color = [
-                            arr[0].as_u64().unwrap_or(255) as u8,
-                            arr[1].as_u64().unwrap_or(255) as u8,
-                            arr[2].as_u64().unwrap_or(255) as u8,
-                            arr[3].as_u64().unwrap_or(255) as u8,
-                        ];
-                    }
-                }
-                if let Some(f) = config.get("font").and_then(|v| v.as_str()) {
-                    self.font_name = f.to_string();
+            fn capabilities(&self) -> WidgetCapabilities {
+                WidgetCapabilities {
+                    color: true,
+                    font: true,
+                    ..Default::default()
                 }
             }
 
+            fn settings(&self) -> WidgetSettings {
+                WidgetSettings {
+                    color: Some(self.color),
+                    font_name: Some(self.font_name.clone()),
+                    ..Default::default()
+                }
+            }
+
+            fn apply_settings(&mut self, settings: &WidgetSettings) {
+                if let Some(color) = settings.color {
+                    self.color = color;
+                }
+                if let Some(font_name) = settings.font_name.as_ref() {
+                    self.font_name = font_name.clone();
+                }
+            }
         }
     };
 }

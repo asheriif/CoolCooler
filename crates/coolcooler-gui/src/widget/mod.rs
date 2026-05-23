@@ -6,7 +6,7 @@ pub mod sysinfo_backend;
 pub mod sysinfo_widgets;
 
 use image::RgbaImage;
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Unique identifier for a widget instance on the canvas.
@@ -29,6 +29,25 @@ pub struct WidgetDescriptor {
 #[derive(Debug, Default)]
 pub struct WidgetContext {
     pub sysinfo: sysinfo_backend::SysInfoData,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WidgetCapabilities {
+    pub color: bool,
+    pub font: bool,
+    pub text: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WidgetSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<[u8; 4]>,
+    #[serde(rename = "font", skip_serializing_if = "Option::is_none")]
+    pub font_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thickness: Option<u32>,
 }
 
 /// Trait for LCD canvas widgets.
@@ -56,50 +75,15 @@ pub trait LcdWidget: fmt::Debug + Send {
         false
     }
 
-    /// Whether this widget supports configurable text styling.
-    fn supports_text_color(&self) -> bool {
-        false
+    fn capabilities(&self) -> WidgetCapabilities {
+        WidgetCapabilities::default()
     }
 
-    fn text_color(&self) -> [u8; 4] {
-        [255, 255, 255, 255]
+    fn settings(&self) -> WidgetSettings {
+        WidgetSettings::default()
     }
 
-    fn set_text_color(&mut self, _color: [u8; 4]) {}
-
-    /// Whether this widget supports a configurable font.
-    fn supports_font(&self) -> bool {
-        false
-    }
-
-    /// Get the current font name.
-    fn font_name(&self) -> &str {
-        fonts::DEFAULT_FONT
-    }
-
-    /// Set the font by name.
-    fn set_font_name(&mut self, _name: String) {}
-
-    /// Whether this widget has editable text content (e.g., free text).
-    fn supports_text_edit(&self) -> bool {
-        false
-    }
-
-    /// Get the current editable text content.
-    fn text_content(&self) -> &str {
-        ""
-    }
-
-    /// Set the editable text content.
-    fn set_text_content(&mut self, _text: String) {}
-
-    /// Serialize widget-specific configuration to JSON.
-    fn save_config(&self) -> Value {
-        Value::Object(serde_json::Map::new())
-    }
-
-    /// Restore widget-specific configuration from JSON.
-    fn load_config(&mut self, _config: &Value) {}
+    fn apply_settings(&mut self, _settings: &WidgetSettings) {}
 }
 
 pub type WidgetFactory = fn() -> Box<dyn LcdWidget>;

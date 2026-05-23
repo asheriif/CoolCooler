@@ -356,7 +356,7 @@ impl CoolCooler {
                 position: layer.position,
                 size: layer.size,
                 opacity: layer.opacity,
-                config: layer.widget.save_config(),
+                config: layer.widget.settings(),
             })
             .collect();
 
@@ -386,7 +386,7 @@ impl CoolCooler {
         for wd in &data.widgets {
             if let Some(spec) = widget::spec_by_type_id(&wd.type_id) {
                 let mut w = spec.create();
-                w.load_config(&wd.config);
+                w.apply_settings(&wd.config);
                 let id = widget::WidgetId(self.canvas.next_id());
                 self.canvas.layers.push(canvas::WidgetLayer {
                     id,
@@ -792,7 +792,9 @@ impl CoolCooler {
             Message::SetWidgetTextColor(color) => {
                 if let LayerSelection::Widget(id) = self.canvas.active_layer {
                     if let Some(layer) = self.canvas.layers.iter_mut().find(|l| l.id == id) {
-                        layer.widget.set_text_color(color);
+                        let mut settings = layer.widget.settings();
+                        settings.color = Some(color);
+                        layer.widget.apply_settings(&settings);
                         self.rebuild_preview();
                     }
                 }
@@ -800,7 +802,9 @@ impl CoolCooler {
             Message::SetWidgetFont(name) => {
                 if let LayerSelection::Widget(id) = self.canvas.active_layer {
                     if let Some(layer) = self.canvas.layers.iter_mut().find(|l| l.id == id) {
-                        layer.widget.set_font_name(name);
+                        let mut settings = layer.widget.settings();
+                        settings.font_name = Some(name);
+                        layer.widget.apply_settings(&settings);
                         self.rebuild_preview();
                     }
                 }
@@ -808,7 +812,9 @@ impl CoolCooler {
             Message::SetWidgetText(text) => {
                 if let LayerSelection::Widget(id) = self.canvas.active_layer {
                     if let Some(layer) = self.canvas.layers.iter_mut().find(|l| l.id == id) {
-                        layer.widget.set_text_content(text);
+                        let mut settings = layer.widget.settings();
+                        settings.text = Some(text);
+                        layer.widget.apply_settings(&settings);
                         self.rebuild_preview();
                     }
                 }
@@ -1158,6 +1164,8 @@ impl CoolCooler {
             if let LayerSelection::Widget(id) = self.canvas.active_layer {
                 self.canvas.layers.iter().find(|l| l.id == id).map(|layer| {
                     let opacity_val = layer.opacity as f32 / 255.0;
+                    let capabilities = layer.widget.capabilities();
+                    let settings = layer.widget.settings();
                     let mut config_items = column![row![
                         text("Opacity").size(12).color(c.text_dim).width(60),
                         slider(0.0..=1.0, opacity_val, Message::SetWidgetOpacity)
@@ -1172,9 +1180,8 @@ impl CoolCooler {
                     .align_y(iced::Alignment::Center)]
                     .spacing(8);
 
-                    // Text color swatches (only for widgets that support it)
-                    if layer.widget.supports_text_color() {
-                        let current_color = layer.widget.text_color();
+                    if capabilities.color {
+                        let current_color = settings.color.unwrap_or([255, 255, 255, 255]);
                         let colors: Vec<([u8; 4], &str)> = vec![
                             ([255, 255, 255, 255], "White"),
                             ([220, 220, 220, 255], "Light Gray"),
@@ -1222,13 +1229,15 @@ impl CoolCooler {
                         config_items = config_items.push(swatches);
                     }
 
-                    // Font dropdown (for widgets that support it)
-                    if layer.widget.supports_font() {
+                    if capabilities.font {
                         let font_names: Vec<String> = widget::fonts::font_names()
                             .into_iter()
                             .map(|s| s.to_string())
                             .collect();
-                        let current_font = layer.widget.font_name().to_string();
+                        let current_font = settings
+                            .font_name
+                            .clone()
+                            .unwrap_or_else(|| widget::fonts::DEFAULT_FONT.to_string());
                         config_items = config_items.push(
                             row![
                                 text("Font").size(12).color(c.text_dim).width(60),
@@ -1241,9 +1250,8 @@ impl CoolCooler {
                         );
                     }
 
-                    // Text content input (for FreeText widget)
-                    if layer.widget.supports_text_edit() {
-                        let current_text = layer.widget.text_content().to_string();
+                    if capabilities.text {
+                        let current_text = settings.text.clone().unwrap_or_default();
                         config_items = config_items.push(
                             row![
                                 text("Text").size(12).color(c.text_dim).width(60),
