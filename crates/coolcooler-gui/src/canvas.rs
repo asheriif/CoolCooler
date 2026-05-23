@@ -2,23 +2,9 @@ use image::{imageops, RgbaImage};
 
 use coolcooler_core::Resolution;
 
+pub(crate) use crate::viewport::Viewport;
+use crate::viewport::ViewportTransform;
 use crate::widget::{LcdWidget, WidgetContext, WidgetEdit, WidgetId, WidgetSpec};
-
-/// Viewport state for a single layer.
-#[derive(Debug, Clone)]
-pub struct Viewport {
-    pub zoom: f32,
-    pub pan: (f32, f32),
-}
-
-impl Default for Viewport {
-    fn default() -> Self {
-        Self {
-            zoom: 1.0,
-            pan: (0.0, 0.0),
-        }
-    }
-}
 
 /// Which layer the user is currently controlling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -224,15 +210,12 @@ impl Canvas {
     ) -> bool {
         match self.active_layer {
             LayerSelection::Base => {
-                let Some(source_size) = source_size else {
+                let Some(transform) = source_size.and_then(|source_size| {
+                    ViewportTransform::new(source_size, resolution, self.base_viewport.zoom)
+                }) else {
                     return false;
                 };
-                let (fit_w, fit_h) = fitted_viewport_size(source_size, resolution);
-                let vis_w = fit_w / self.base_viewport.zoom;
-                let vis_h = fit_h / self.base_viewport.zoom;
-                self.base_viewport.pan.0 -= delta.0 * (vis_w / resolution.width.max(1) as f32);
-                self.base_viewport.pan.1 -= delta.1 * (vis_h / resolution.height.max(1) as f32);
-                self.clamp_base_pan(source_size, resolution);
+                self.base_viewport.pan = transform.pan_after_drag(self.base_viewport.pan, delta);
                 true
             }
             LayerSelection::Widget(_) => {
@@ -374,22 +357,10 @@ impl Canvas {
     }
 
     fn clamp_base_pan(&mut self, source_size: (u32, u32), resolution: Resolution) {
-        let (sw, sh) = (source_size.0 as f32, source_size.1 as f32);
-        let vp = &mut self.base_viewport;
-        let (fit_w, fit_h) = fitted_viewport_size(source_size, resolution);
-        let vis_w = fit_w / vp.zoom;
-        let vis_h = fit_h / vp.zoom;
-
-        if vis_w <= sw && vis_h <= sh {
-            let max_pan_x = ((sw - vis_w) / 2.0).max(0.0);
-            let max_pan_y = ((sh - vis_h) / 2.0).max(0.0);
-            vp.pan.0 = vp.pan.0.clamp(-max_pan_x, max_pan_x);
-            vp.pan.1 = vp.pan.1.clamp(-max_pan_y, max_pan_y);
-        } else {
-            let margin_x = vis_w * 0.375;
-            let margin_y = vis_h * 0.375;
-            vp.pan.0 = vp.pan.0.clamp(-margin_x, margin_x);
-            vp.pan.1 = vp.pan.1.clamp(-margin_y, margin_y);
+        if let Some(transform) =
+            ViewportTransform::new(source_size, resolution, self.base_viewport.zoom)
+        {
+            self.base_viewport.pan = transform.clamp_pan(self.base_viewport.pan);
         }
     }
 }
@@ -399,16 +370,4 @@ fn default_widget_position(resolution: Resolution, widget_size: (u32, u32)) -> (
         (resolution.width as i32 - widget_size.0 as i32) / 2,
         (resolution.height as i32 - widget_size.1 as i32) / 2,
     )
-}
-
-fn fitted_viewport_size(source_size: (u32, u32), resolution: Resolution) -> (f32, f32) {
-    let (sw, sh) = (source_size.0 as f32, source_size.1 as f32);
-    let target_ratio = resolution.width.max(1) as f32 / resolution.height.max(1) as f32;
-    let src_ratio = sw / sh;
-
-    if src_ratio > target_ratio {
-        (sh * target_ratio, sh)
-    } else {
-        (sw, sw / target_ratio)
-    }
 }

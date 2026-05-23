@@ -12,6 +12,7 @@ mod style;
 mod tray;
 mod update;
 mod view;
+mod viewport;
 mod widget;
 mod window_flow;
 mod windowing;

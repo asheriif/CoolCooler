@@ -3,6 +3,8 @@ use fast_image_resize as fir;
 use iced::widget::image::Handle;
 use image::{imageops, Rgba, RgbaImage};
 
+use crate::viewport::{BaseRenderPlan, ViewportTransform};
+
 /// Render the base layer at its viewport.
 pub(crate) fn render_base_rgba(
     source: &RgbaImage,
@@ -10,50 +12,33 @@ pub(crate) fn render_base_rgba(
     zoom: f32,
     pan: (f32, f32),
 ) -> RgbaImage {
-    let (sw, sh) = (source.width() as f32, source.height() as f32);
-    let res = resolution;
-
-    if res.width == 0 || res.height == 0 || source.width() == 0 || source.height() == 0 {
-        return RgbaImage::new(res.width, res.height);
-    }
-
-    let target_ratio = res.width as f32 / res.height as f32;
-    let src_ratio = sw / sh;
-    let (fit_w, fit_h) = if src_ratio > target_ratio {
-        (sh * target_ratio, sh)
-    } else {
-        (sw, sw / target_ratio)
+    let Some(transform) =
+        ViewportTransform::new((source.width(), source.height()), resolution, zoom)
+    else {
+        return RgbaImage::new(resolution.width, resolution.height);
     };
 
-    let vis_w = fit_w / zoom;
-    let vis_h = fit_h / zoom;
-
-    if vis_w <= sw && vis_h <= sh {
-        let cx = (sw / 2.0 + pan.0).clamp(vis_w / 2.0, sw - vis_w / 2.0);
-        let cy = (sh / 2.0 + pan.1).clamp(vis_h / 2.0, sh - vis_h / 2.0);
-
-        let x0 = (cx - vis_w / 2.0).max(0.0) as u32;
-        let y0 = (cy - vis_h / 2.0).max(0.0) as u32;
-        let crop_w = (vis_w.round() as u32).clamp(1, source.width() - x0);
-        let crop_h = (vis_h.round() as u32).clamp(1, source.height() - y0);
-
-        let cropped = imageops::crop_imm(source, x0, y0, crop_w, crop_h).to_image();
-        resize_rgba(&cropped, res.width, res.height)
-    } else {
-        let scale = (res.width as f32 / fit_w).min(res.height as f32 / fit_h) * zoom;
-        let scaled_w = (sw * scale).round() as u32;
-        let scaled_h = (sh * scale).round() as u32;
-
-        let scaled = resize_rgba(source, scaled_w.max(1), scaled_h.max(1));
-
-        let pan_ox = (pan.0 * scale).round() as i64;
-        let pan_oy = (pan.1 * scale).round() as i64;
-
-        let mut canvas = RgbaImage::from_pixel(res.width, res.height, Rgba([0, 0, 0, 255]));
-        let base_ox = (res.width.saturating_sub(scaled_w)) as i64 / 2;
-        let base_oy = (res.height.saturating_sub(scaled_h)) as i64 / 2;
-        imageops::overlay(&mut canvas, &scaled, base_ox - pan_ox, base_oy - pan_oy);
-        canvas
+    match transform.render_plan(pan) {
+        BaseRenderPlan::Crop {
+            x,
+            y,
+            width,
+            height,
+        } => {
+            let cropped = imageops::crop_imm(source, x, y, width, height).to_image();
+            resize_rgba(&cropped, resolution.width, resolution.height)
+        }
+        BaseRenderPlan::Fit {
+            width,
+            height,
+            offset,
+        } => {
+            let scaled = resize_rgba(source, width, height);
+            let mut canvas =
+                RgbaImage::from_pixel(resolution.width, resolution.height, Rgba([0, 0, 0, 255]));
+            imageops::overlay(&mut canvas, &scaled, offset.0, offset.1);
+            canvas
+        }
     }
 }
 
