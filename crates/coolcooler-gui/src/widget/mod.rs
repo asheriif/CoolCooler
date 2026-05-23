@@ -33,16 +33,6 @@ pub struct WidgetContext {
     pub sysinfo: sysinfo_backend::SysInfoData,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum WidgetConfig {
-    Text(TextWidgetConfig),
-    Circle(CircleWidgetConfig),
-    Color(ColorWidgetConfig),
-    #[default]
-    None,
-}
-
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WidgetControls<'a> {
     pub color: Option<[u8; 4]>,
@@ -122,25 +112,20 @@ pub trait LcdWidget: fmt::Debug + Send {
         false
     }
 
-    fn config(&self) -> WidgetConfig {
-        WidgetConfig::None
+    fn config(&self) -> Value {
+        Value::Null
     }
 
     fn controls(&self) -> WidgetControls<'_> {
         WidgetControls::default()
     }
 
-    fn apply_config(&mut self, config: &WidgetConfig) -> Result<(), &'static str> {
-        match config {
-            WidgetConfig::None => Ok(()),
-            _ => Err("widget does not accept this config"),
-        }
-    }
-
     fn apply_config_value(&mut self, config: &Value) -> Result<(), &'static str> {
-        let config: WidgetConfig =
-            serde_json::from_value(config.clone()).map_err(|_| "invalid widget config")?;
-        self.apply_config(&config)
+        if config.is_null() {
+            Ok(())
+        } else {
+            Err("widget does not accept this config")
+        }
     }
 
     fn apply_edit(&mut self, _edit: WidgetEdit) {}
@@ -301,11 +286,11 @@ mod tests {
 
     #[test]
     fn text_widget_config_keeps_existing_preset_shape() {
-        let config = WidgetConfig::Text(TextWidgetConfig {
+        let config = TextWidgetConfig {
             text: Some("Label".to_string()),
             color: [255, 255, 255, 255],
             font_name: "default".to_string(),
-        });
+        };
 
         let value = serde_json::to_value(&config).unwrap();
         assert_eq!(
@@ -316,37 +301,39 @@ mod tests {
                 "font": "default"
             })
         );
-
-        let parsed: WidgetConfig = serde_json::from_value(value).unwrap();
-        assert!(matches!(parsed, WidgetConfig::Text(_)));
     }
 
     #[test]
-    fn widget_config_variants_deserialize_by_shape() {
-        let color: WidgetConfig = serde_json::from_value(json!({
-            "color": [80, 255, 80, 255]
-        }))
-        .unwrap();
-        assert!(matches!(color, WidgetConfig::Color(_)));
+    fn widget_config_is_owned_by_widget_type() {
+        let line = static_widgets::HorizontalLine::new();
+        assert_eq!(
+            line.config(),
+            json!({
+                "color": [255, 255, 255, 200]
+            })
+        );
 
-        let circle: WidgetConfig = serde_json::from_value(json!({
-            "color": [0, 180, 255, 220],
-            "thickness": 3
-        }))
-        .unwrap();
-        assert!(matches!(circle, WidgetConfig::Circle(_)));
+        let circle = static_widgets::CircleGauge::new();
+        assert_eq!(
+            circle.config(),
+            json!({
+                "color": [0, 180, 255, 220],
+                "thickness": 3
+            })
+        );
     }
 
     #[test]
     fn widget_rejects_mismatched_config_shape() {
         let mut line = static_widgets::HorizontalLine::new();
-        let config = WidgetConfig::Text(TextWidgetConfig {
-            text: Some("wrong".to_string()),
-            color: [255, 255, 255, 255],
-            font_name: "default".to_string(),
-        });
 
-        assert!(line.apply_config(&config).is_err());
+        assert!(line
+            .apply_config_value(&json!({
+                "text": "wrong",
+                "color": [255, 255, 255, 255],
+                "font": "default"
+            }))
+            .is_err());
     }
 
     #[test]
@@ -369,10 +356,13 @@ mod tests {
         assert_eq!(controls.color, Some([255, 255, 255, 255]));
         assert_eq!(controls.font_name, Some(fonts::DEFAULT_FONT));
         assert_eq!(controls.editable_text, None);
-        assert!(matches!(
+        assert_eq!(
             clock.config(),
-            WidgetConfig::Text(TextWidgetConfig { text: None, .. })
-        ));
+            json!({
+                "color": [255, 255, 255, 255],
+                "font": fonts::DEFAULT_FONT
+            })
+        );
     }
 
     #[test]

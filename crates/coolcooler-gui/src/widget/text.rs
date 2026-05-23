@@ -1,8 +1,11 @@
 use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use image::{Rgba, RgbaImage};
 use imageproc::drawing::draw_text_mut;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+use serde_json::Value;
 
-use super::{fonts, TextWidgetConfig, WidgetConfig, WidgetControls, WidgetEdit};
+use super::{fonts, TextWidgetConfig, WidgetControls, WidgetEdit};
 
 #[derive(Debug, Clone)]
 pub(super) struct TextState {
@@ -39,8 +42,8 @@ impl TextState {
         img
     }
 
-    pub(super) fn config(&self, include_text: bool) -> WidgetConfig {
-        WidgetConfig::Text(TextWidgetConfig {
+    pub(super) fn config_value(&self, include_text: bool) -> Value {
+        to_value(TextWidgetConfig {
             text: include_text.then(|| self.text.clone()),
             color: self.color,
             font_name: self.font_name.clone(),
@@ -55,14 +58,12 @@ impl TextState {
         )
     }
 
-    pub(super) fn apply_config(
+    pub(super) fn apply_config_value(
         &mut self,
-        config: &WidgetConfig,
+        config: &Value,
         allow_text: bool,
     ) -> Result<(), &'static str> {
-        let WidgetConfig::Text(config) = config else {
-            return Err("expected text widget config");
-        };
+        let config: TextWidgetConfig = from_value(config)?;
 
         if allow_text {
             if let Some(text) = config.text.as_ref() {
@@ -98,4 +99,12 @@ impl TextState {
             true
         }
     }
+}
+
+pub(super) fn to_value(config: impl Serialize) -> Value {
+    serde_json::to_value(config).unwrap_or(Value::Null)
+}
+
+pub(super) fn from_value<T: DeserializeOwned>(config: &Value) -> Result<T, &'static str> {
+    serde_json::from_value(config.clone()).map_err(|_| "invalid widget config")
 }

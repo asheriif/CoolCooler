@@ -25,8 +25,7 @@ impl CoolCooler {
                 position: layer.position,
                 size: layer.size,
                 opacity: layer.opacity,
-                config: serde_json::to_value(layer.widget.config())
-                    .unwrap_or(serde_json::Value::Null),
+                config: layer.widget.config(),
             })
             .collect();
 

@@ -1,9 +1,9 @@
 use image::{Rgba, RgbaImage};
 use imageproc::drawing::{draw_filled_circle_mut, draw_hollow_circle_mut};
 
-use super::text::TextState;
+use super::text::{from_value, to_value, TextState};
 use super::{
-    CircleWidgetConfig, ColorWidgetConfig, LcdWidget, WidgetConfig, WidgetContext, WidgetControls,
+    CircleWidgetConfig, ColorWidgetConfig, LcdWidget, WidgetContext, WidgetControls,
     WidgetDescriptor, WidgetEdit,
 };
 
@@ -39,16 +39,16 @@ impl LcdWidget for FreeText {
         self.text.render(width, height, 0.7)
     }
 
-    fn config(&self) -> WidgetConfig {
-        self.text.config(true)
+    fn config(&self) -> serde_json::Value {
+        self.text.config_value(true)
     }
 
     fn controls(&self) -> WidgetControls<'_> {
         self.text.controls(true)
     }
 
-    fn apply_config(&mut self, config: &WidgetConfig) -> Result<(), &'static str> {
-        self.text.apply_config(config, true)
+    fn apply_config_value(&mut self, config: &serde_json::Value) -> Result<(), &'static str> {
+        self.text.apply_config_value(config, true)
     }
 
     fn apply_edit(&mut self, edit: WidgetEdit) {
@@ -97,18 +97,16 @@ impl LcdWidget for HorizontalLine {
         img
     }
 
-    fn config(&self) -> WidgetConfig {
-        WidgetConfig::Color(ColorWidgetConfig { color: self.color })
+    fn config(&self) -> serde_json::Value {
+        to_value(ColorWidgetConfig { color: self.color })
     }
 
     fn controls(&self) -> WidgetControls<'_> {
         WidgetControls::color(self.color)
     }
 
-    fn apply_config(&mut self, config: &WidgetConfig) -> Result<(), &'static str> {
-        let WidgetConfig::Color(config) = config else {
-            return Err("expected color widget config");
-        };
+    fn apply_config_value(&mut self, config: &serde_json::Value) -> Result<(), &'static str> {
+        let config: ColorWidgetConfig = from_value(config)?;
         self.color = config.color;
         Ok(())
     }
@@ -161,18 +159,16 @@ impl LcdWidget for VerticalLine {
         img
     }
 
-    fn config(&self) -> WidgetConfig {
-        WidgetConfig::Color(ColorWidgetConfig { color: self.color })
+    fn config(&self) -> serde_json::Value {
+        to_value(ColorWidgetConfig { color: self.color })
     }
 
     fn controls(&self) -> WidgetControls<'_> {
         WidgetControls::color(self.color)
     }
 
-    fn apply_config(&mut self, config: &WidgetConfig) -> Result<(), &'static str> {
-        let WidgetConfig::Color(config) = config else {
-            return Err("expected color widget config");
-        };
+    fn apply_config_value(&mut self, config: &serde_json::Value) -> Result<(), &'static str> {
+        let config: ColorWidgetConfig = from_value(config)?;
         self.color = config.color;
         Ok(())
     }
@@ -236,8 +232,8 @@ impl LcdWidget for CircleGauge {
         img
     }
 
-    fn config(&self) -> WidgetConfig {
-        WidgetConfig::Circle(CircleWidgetConfig {
+    fn config(&self) -> serde_json::Value {
+        to_value(CircleWidgetConfig {
             color: self.color,
             thickness: self.thickness,
         })
@@ -247,10 +243,8 @@ impl LcdWidget for CircleGauge {
         WidgetControls::color(self.color)
     }
 
-    fn apply_config(&mut self, config: &WidgetConfig) -> Result<(), &'static str> {
-        let WidgetConfig::Circle(config) = config else {
-            return Err("expected circle widget config");
-        };
+    fn apply_config_value(&mut self, config: &serde_json::Value) -> Result<(), &'static str> {
+        let config: CircleWidgetConfig = from_value(config)?;
         self.color = config.color;
         self.thickness = config.thickness;
         Ok(())
@@ -305,18 +299,16 @@ impl LcdWidget for FilledCircle {
         img
     }
 
-    fn config(&self) -> WidgetConfig {
-        WidgetConfig::Color(ColorWidgetConfig { color: self.color })
+    fn config(&self) -> serde_json::Value {
+        to_value(ColorWidgetConfig { color: self.color })
     }
 
     fn controls(&self) -> WidgetControls<'_> {
         WidgetControls::color(self.color)
     }
 
-    fn apply_config(&mut self, config: &WidgetConfig) -> Result<(), &'static str> {
-        let WidgetConfig::Color(config) = config else {
-            return Err("expected color widget config");
-        };
+    fn apply_config_value(&mut self, config: &serde_json::Value) -> Result<(), &'static str> {
+        let config: ColorWidgetConfig = from_value(config)?;
         self.color = config.color;
         Ok(())
     }
