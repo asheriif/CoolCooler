@@ -14,11 +14,19 @@ pub(crate) struct DisplayController {
 
 enum DisplayState {
     Idle,
-    Running(DisplaySession),
+    Running(SessionHandle),
     Stopping {
-        session: DisplaySession,
+        session: SessionHandle,
         pending_restart: Option<PendingStart>,
     },
+}
+
+type SessionHandle = Box<dyn DisplaySessionHandle>;
+
+trait DisplaySessionHandle: Send {
+    fn submit_frame(&self, bytes: Vec<u8>);
+    fn request_stop(&self);
+    fn join_if_finished(&mut self) -> bool;
 }
 
 struct PendingStart {
@@ -132,6 +140,13 @@ impl DisplayController {
 
     pub(crate) fn join_finished(&mut self) {
         match std::mem::replace(&mut self.state, DisplayState::Idle) {
+            DisplayState::Running(mut session) => {
+                if session.join_if_finished() {
+                    self.state = DisplayState::Idle;
+                } else {
+                    self.state = DisplayState::Running(session);
+                }
+            }
             DisplayState::Stopping {
                 mut session,
                 pending_restart,
@@ -155,15 +170,18 @@ impl DisplayController {
         }
     }
 
-    pub(crate) fn is_stopping(&self) -> bool {
-        matches!(self.state, DisplayState::Stopping { .. })
+    pub(crate) fn needs_lifecycle_poll(&self) -> bool {
+        matches!(
+            self.state,
+            DisplayState::Running(_) | DisplayState::Stopping { .. }
+        )
     }
 
     fn start(&mut self, pending_start: PendingStart) {
-        self.state = DisplayState::Running(DisplaySession::start(
+        self.state = DisplayState::Running(Box::new(DisplaySession::start(
             pending_start.driver,
             pending_start.frame,
-        ));
+        )));
     }
 
     fn refresh_status(&mut self) {
@@ -227,21 +245,21 @@ impl DisplaySession {
         }
     }
 
-    pub(crate) fn submit_frame(&self, bytes: Vec<u8>) {
+    fn submit_frame(&self, bytes: Vec<u8>) {
         if let Ok(mut frame) = self.shared_frame.lock() {
             *frame = bytes;
         }
     }
 
-    pub(crate) fn request_stop(&self) {
+    fn request_stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
     }
 
-    pub(crate) fn is_finished(&self) -> bool {
+    fn is_finished(&self) -> bool {
         self.join.as_ref().is_none_or(|join| join.is_finished())
     }
 
-    pub(crate) fn join_if_finished(&mut self) -> bool {
+    fn join_if_finished(&mut self) -> bool {
         if !self.is_finished() {
             return false;
         }
@@ -260,9 +278,112 @@ impl DisplaySession {
     }
 }
 
+impl DisplaySessionHandle for DisplaySession {
+    fn submit_frame(&self, bytes: Vec<u8>) {
+        Self::submit_frame(self, bytes);
+    }
+
+    fn request_stop(&self) {
+        Self::request_stop(self);
+    }
+
+    fn join_if_finished(&mut self) -> bool {
+        Self::join_if_finished(self)
+    }
+}
+
 impl Drop for DisplaySession {
     fn drop(&mut self) {
         self.request_stop();
         self.join_in_background();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    struct FakeSession {
+        finished: bool,
+        stop_requests: Arc<AtomicUsize>,
+        joined: Arc<AtomicUsize>,
+        submitted: Arc<Mutex<Vec<Vec<u8>>>>,
+    }
+
+    impl FakeSession {
+        fn new(finished: bool) -> Self {
+            Self {
+                finished,
+                stop_requests: Arc::new(AtomicUsize::new(0)),
+                joined: Arc::new(AtomicUsize::new(0)),
+                submitted: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+    }
+
+    impl DisplaySessionHandle for FakeSession {
+        fn submit_frame(&self, bytes: Vec<u8>) {
+            self.submitted.lock().unwrap().push(bytes);
+        }
+
+        fn request_stop(&self) {
+            self.stop_requests.fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn join_if_finished(&mut self) -> bool {
+            if self.finished {
+                self.joined.fetch_add(1, Ordering::Relaxed);
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    fn controller_with(state: DisplayState) -> DisplayController {
+        DisplayController {
+            state,
+            status: DisplayStatus::disconnected(),
+        }
+    }
+
+    #[test]
+    fn finished_running_session_is_reaped() {
+        let session = FakeSession::new(true);
+        let joined = Arc::clone(&session.joined);
+        let mut controller = controller_with(DisplayState::Running(Box::new(session)));
+
+        controller.join_finished();
+
+        assert!(matches!(controller.state, DisplayState::Idle));
+        assert_eq!(joined.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn unfinished_running_session_stays_running() {
+        let session = FakeSession::new(false);
+        let joined = Arc::clone(&session.joined);
+        let mut controller = controller_with(DisplayState::Running(Box::new(session)));
+
+        controller.join_finished();
+
+        assert!(matches!(controller.state, DisplayState::Running(_)));
+        assert_eq!(joined.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn stopping_session_without_restart_goes_idle_after_join() {
+        let session = FakeSession::new(true);
+        let joined = Arc::clone(&session.joined);
+        let mut controller = controller_with(DisplayState::Stopping {
+            session: Box::new(session),
+            pending_restart: None,
+        });
+
+        controller.join_finished();
+
+        assert!(matches!(controller.state, DisplayState::Idle));
+        assert_eq!(joined.load(Ordering::Relaxed), 1);
     }
 }

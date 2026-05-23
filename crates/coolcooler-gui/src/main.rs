@@ -137,7 +137,7 @@ enum Message {
     ToggleTheme,
     WindowClosed(window::Id),
     TrayPoll,
-    DisplayStopPoll,
+    DisplaySessionPoll,
     ShowWindow,
     Quit,
 }
@@ -422,7 +422,7 @@ impl CoolCooler {
         self.display.stop();
     }
 
-    fn reap_stopped_display(&mut self) {
+    fn reap_display_session(&mut self) {
         self.display.join_finished();
     }
 
@@ -811,8 +811,8 @@ impl CoolCooler {
                     return self.update(Message::ShowWindow);
                 }
             }
-            Message::DisplayStopPoll => {
-                self.reap_stopped_display();
+            Message::DisplaySessionPoll => {
+                self.reap_display_session();
             }
             Message::WindowClosed(id) => {
                 if self.window_id == Some(id) {
@@ -875,9 +875,9 @@ impl CoolCooler {
             subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::WidgetTick));
         }
 
-        if self.display.is_stopping() {
+        if self.display.needs_lifecycle_poll() {
             subs.push(
-                iced::time::every(Duration::from_millis(100)).map(|_| Message::DisplayStopPoll),
+                iced::time::every(Duration::from_millis(100)).map(|_| Message::DisplaySessionPoll),
             );
         }
 
