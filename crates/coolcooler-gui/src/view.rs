@@ -66,8 +66,7 @@ fn left_panel<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Element<'a, Message>
 }
 
 fn device_card<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Element<'a, Message> {
-    let content: Element<Message> = if app.display.is_connected() {
-        let info = app.display.info();
+    let content: Element<Message> = if let Some(info) = app.display.device_info() {
         let (w, h) = (info.resolution.width, info.resolution.height);
         column![
             section_label("DEVICE", c),

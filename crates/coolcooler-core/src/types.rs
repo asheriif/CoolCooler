@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Resolution {
     pub width: u32,
     pub height: u32,
@@ -25,7 +25,7 @@ pub enum Rotation {
     Deg270,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct DeviceInfo {
     pub name: String,
     pub resolution: Resolution,

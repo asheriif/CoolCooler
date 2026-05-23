@@ -26,9 +26,11 @@ pub(crate) struct CanvasPolicy {
 }
 
 impl CanvasPolicy {
-    pub(crate) fn for_content(capability: DisplayCapability, source: SourceKind) -> Self {
+    pub(crate) fn for_content(capability: Option<DisplayCapability>, source: SourceKind) -> Self {
         Self {
-            widgets_allowed: widgets_allowed(capability, source.is_animated()),
+            widgets_allowed: capability
+                .map(|capability| widgets_allowed(capability, source.is_animated()))
+                .unwrap_or(true),
         }
     }
 

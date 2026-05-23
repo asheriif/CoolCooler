@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use coolcooler_core::frame::{self, DEFAULT_JPEG_QUALITY};
-use coolcooler_core::DeviceInfo;
+use coolcooler_core::{DeviceInfo, Resolution};
 use coolcooler_driver::{DisplayCapability, DisplayDriver};
 use image::{DynamicImage, RgbaImage};
 
@@ -11,6 +11,8 @@ pub(crate) struct DisplayController {
     state: DisplayState,
     status: DisplayStatus,
 }
+
+const FALLBACK_PREVIEW_RESOLUTION: Resolution = Resolution::new(240, 240);
 
 enum DisplayState {
     Idle,
@@ -35,26 +37,37 @@ struct PendingStart {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct DisplayStatus {
-    connected: bool,
-    info: DeviceInfo,
-    capability: DisplayCapability,
+pub(crate) enum DisplayStatus {
+    Disconnected,
+    Connected {
+        info: DeviceInfo,
+        capability: DisplayCapability,
+    },
 }
 
 impl DisplayStatus {
     fn disconnected() -> Self {
-        Self {
-            connected: false,
-            info: DeviceInfo::default(),
-            capability: DisplayCapability::Streaming,
-        }
+        Self::Disconnected
     }
 
     fn from_driver(driver: &DisplayDriver) -> Self {
-        Self {
-            connected: true,
+        Self::Connected {
             info: driver.info().clone(),
             capability: driver.capability(),
+        }
+    }
+
+    fn info(&self) -> Option<&DeviceInfo> {
+        match self {
+            Self::Connected { info, .. } => Some(info),
+            Self::Disconnected => None,
+        }
+    }
+
+    fn capability(&self) -> Option<DisplayCapability> {
+        match self {
+            Self::Connected { capability, .. } => Some(*capability),
+            Self::Disconnected => None,
         }
     }
 }
@@ -69,16 +82,19 @@ impl DisplayController {
         controller
     }
 
-    pub(crate) fn info(&self) -> &DeviceInfo {
-        &self.status.info
+    pub(crate) fn device_info(&self) -> Option<&DeviceInfo> {
+        self.status.info()
     }
 
-    pub(crate) fn capability(&self) -> DisplayCapability {
-        self.status.capability
+    pub(crate) fn resolution(&self) -> Resolution {
+        self.status
+            .info()
+            .map(|info| info.resolution)
+            .unwrap_or(FALLBACK_PREVIEW_RESOLUTION)
     }
 
-    pub(crate) fn is_connected(&self) -> bool {
-        self.status.connected
+    pub(crate) fn capability(&self) -> Option<DisplayCapability> {
+        self.status.capability()
     }
 
     pub(crate) fn restart(&mut self, composited: &RgbaImage) {
@@ -131,7 +147,11 @@ impl DisplayController {
 
     pub(crate) fn submit_frame(&self, composited: &RgbaImage) {
         if let DisplayState::Running(session) = &self.state {
-            if let Some(bytes) = encode_frame(composited, &self.status.info, self.status.capability)
+            if let Some(bytes) = self
+                .status
+                .info()
+                .zip(self.status.capability())
+                .and_then(|(info, capability)| encode_frame(composited, info, capability))
             {
                 session.submit_frame(bytes);
             }
@@ -197,7 +217,7 @@ impl DisplayController {
             return None;
         };
         self.status = DisplayStatus::from_driver(&driver);
-        let frame = encode_frame(composited, &self.status.info, self.status.capability)?;
+        let frame = encode_frame(composited, driver.info(), driver.capability())?;
         Some(PendingStart { driver, frame })
     }
 }
@@ -346,6 +366,15 @@ mod tests {
             state,
             status: DisplayStatus::disconnected(),
         }
+    }
+
+    #[test]
+    fn disconnected_controller_has_no_device_info() {
+        let controller = controller_with(DisplayState::Idle);
+
+        assert!(controller.device_info().is_none());
+        assert_eq!(controller.capability(), None);
+        assert_eq!(controller.resolution(), FALLBACK_PREVIEW_RESOLUTION);
     }
 
     #[test]

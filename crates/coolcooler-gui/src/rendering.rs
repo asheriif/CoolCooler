@@ -1,4 +1,4 @@
-use coolcooler_core::DeviceInfo;
+use coolcooler_core::Resolution;
 use fast_image_resize as fir;
 use iced::widget::image::Handle;
 use image::{imageops, Rgba, RgbaImage};
@@ -6,12 +6,12 @@ use image::{imageops, Rgba, RgbaImage};
 /// Render the base layer at its viewport.
 pub(crate) fn render_base_rgba(
     source: &RgbaImage,
-    info: &DeviceInfo,
+    resolution: Resolution,
     zoom: f32,
     pan: (f32, f32),
 ) -> RgbaImage {
     let (sw, sh) = (source.width() as f32, source.height() as f32);
-    let res = info.resolution;
+    let res = resolution;
 
     if res.width == 0 || res.height == 0 || source.width() == 0 || source.height() == 0 {
         return RgbaImage::new(res.width, res.height);
@@ -106,24 +106,15 @@ pub(crate) fn circular_preview_from_rgba(mut rgba: RgbaImage) -> Handle {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use coolcooler_core::{DeviceInfo, Resolution, Rotation};
+    use coolcooler_core::Resolution;
 
     use super::*;
 
     #[test]
     fn render_base_preserves_rectangular_target_resolution() {
         let source = RgbaImage::from_pixel(120, 120, Rgba([255, 0, 0, 255]));
-        let info = DeviceInfo {
-            name: "rectangular".to_string(),
-            resolution: Resolution::new(240, 320),
-            rotation: Rotation::None,
-            target_fps: 1.0,
-            keepalive_interval: Duration::from_secs(1),
-        };
 
-        let rendered = render_base_rgba(&source, &info, 1.0, (0.0, 0.0));
+        let rendered = render_base_rgba(&source, Resolution::new(240, 320), 1.0, (0.0, 0.0));
 
         assert_eq!(rendered.width(), 240);
         assert_eq!(rendered.height(), 320);

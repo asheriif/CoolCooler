@@ -216,7 +216,7 @@ impl CoolCooler {
     }
 
     fn lcd_resolution(&self) -> Resolution {
-        self.display.info().resolution
+        self.display.resolution()
     }
 
     /// Render the full composited LCD RGBA frame (base + widgets).
@@ -224,7 +224,7 @@ impl CoolCooler {
         let resolution = self.lcd_resolution();
         let base = if let Some(src) = self.source_frames.get(self.current_frame) {
             let vp = self.canvas.base_viewport();
-            render_base_rgba(&src.rgba, self.display.info(), vp.zoom, vp.pan)
+            render_base_rgba(&src.rgba, resolution, vp.zoom, vp.pan)
         } else {
             RgbaImage::from_pixel(resolution.width, resolution.height, Rgba([0, 0, 0, 255]))
         };
