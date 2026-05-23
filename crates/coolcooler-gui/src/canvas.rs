@@ -1,5 +1,7 @@
 use image::{imageops, RgbaImage};
 
+use coolcooler_core::Resolution;
+
 use crate::widget::{LcdWidget, WidgetContext, WidgetEdit, WidgetId, WidgetSpec};
 
 /// Viewport state for a single layer.
@@ -123,14 +125,11 @@ impl Canvas {
     }
 
     /// Add a widget instance to the canvas, centered by default.
-    pub fn add_widget(&mut self, spec: &WidgetSpec, lcd_size: u32) -> WidgetId {
+    pub fn add_widget(&mut self, spec: &WidgetSpec, resolution: Resolution) -> WidgetId {
         let id = WidgetId(self.next_id);
         self.next_id += 1;
         let size = spec.descriptor.default_size;
-        let position = (
-            (lcd_size as i32 - size.0 as i32) / 2,
-            (lcd_size as i32 - size.1 as i32) / 2,
-        );
+        let position = default_widget_position(resolution, size);
         self.layers.push(WidgetLayer {
             id,
             type_id: spec.type_id,
@@ -187,14 +186,19 @@ impl Canvas {
         true
     }
 
-    pub fn zoom_active_layer(&mut self, factor: f32, source_size: Option<(u32, u32)>) -> bool {
+    pub fn zoom_active_layer(
+        &mut self,
+        factor: f32,
+        resolution: Resolution,
+        source_size: Option<(u32, u32)>,
+    ) -> bool {
         match self.active_layer {
             LayerSelection::Base => {
                 let Some(source_size) = source_size else {
                     return false;
                 };
                 self.base_viewport.zoom = (self.base_viewport.zoom * factor).clamp(0.25, 10.0);
-                self.clamp_base_pan(source_size);
+                self.clamp_base_pan(source_size, resolution);
                 true
             }
             LayerSelection::Widget(_) => {
@@ -203,7 +207,10 @@ impl Canvas {
                 };
                 let new_w = ((layer.size.0 as f32) * factor).round() as u32;
                 let new_h = ((layer.size.1 as f32) * factor).round() as u32;
-                layer.size = (new_w.clamp(10, 240), new_h.clamp(10, 240));
+                layer.size = (
+                    new_w.clamp(10, resolution.width.max(10)),
+                    new_h.clamp(10, resolution.height.max(10)),
+                );
                 true
             }
         }
@@ -212,7 +219,7 @@ impl Canvas {
     pub fn drag_active_layer(
         &mut self,
         delta: (f32, f32),
-        lcd_size: u32,
+        resolution: Resolution,
         source_size: Option<(u32, u32)>,
     ) -> bool {
         match self.active_layer {
@@ -220,12 +227,12 @@ impl Canvas {
                 let Some(source_size) = source_size else {
                     return false;
                 };
-                let (sw, sh) = (source_size.0 as f32, source_size.1 as f32);
-                let vis = sw.min(sh) / self.base_viewport.zoom;
-                let src_per_px = vis / lcd_size as f32;
-                self.base_viewport.pan.0 -= delta.0 * src_per_px;
-                self.base_viewport.pan.1 -= delta.1 * src_per_px;
-                self.clamp_base_pan(source_size);
+                let (fit_w, fit_h) = fitted_viewport_size(source_size, resolution);
+                let vis_w = fit_w / self.base_viewport.zoom;
+                let vis_h = fit_h / self.base_viewport.zoom;
+                self.base_viewport.pan.0 -= delta.0 * (vis_w / resolution.width.max(1) as f32);
+                self.base_viewport.pan.1 -= delta.1 * (vis_h / resolution.height.max(1) as f32);
+                self.clamp_base_pan(source_size, resolution);
                 true
             }
             LayerSelection::Widget(_) => {
@@ -238,20 +245,21 @@ impl Canvas {
                     layer.position.1 + delta.1 as i32,
                 );
                 let min_visible = 10i32;
-                let lcd = lcd_size as i32;
+                let lcd_w = resolution.width as i32;
+                let lcd_h = resolution.height as i32;
                 new_pos.0 = new_pos
                     .0
-                    .clamp(-(size.0 as i32) + min_visible, lcd - min_visible);
+                    .clamp(-(size.0 as i32) + min_visible, lcd_w - min_visible);
                 new_pos.1 = new_pos
                     .1
-                    .clamp(-(size.1 as i32) + min_visible, lcd - min_visible);
+                    .clamp(-(size.1 as i32) + min_visible, lcd_h - min_visible);
                 layer.position = new_pos;
                 true
             }
         }
     }
 
-    pub fn reset_active_layer(&mut self, lcd_size: u32) -> bool {
+    pub fn reset_active_layer(&mut self, resolution: Resolution) -> bool {
         match self.active_layer {
             LayerSelection::Base => {
                 if self.base_viewport.zoom == 1.0 && self.base_viewport.pan == (0.0, 0.0) {
@@ -265,7 +273,7 @@ impl Canvas {
                     return false;
                 };
                 let default_size = layer.widget.descriptor().default_size;
-                let default_position = default_widget_position(lcd_size, default_size);
+                let default_position = default_widget_position(resolution, default_size);
                 if layer.size == default_size && layer.position == default_position {
                     return false;
                 }
@@ -276,7 +284,7 @@ impl Canvas {
         }
     }
 
-    pub fn active_layer_can_reset(&self, lcd_size: u32) -> bool {
+    pub fn active_layer_can_reset(&self, resolution: Resolution) -> bool {
         match self.active_layer {
             LayerSelection::Base => {
                 (self.base_viewport.zoom - 1.0).abs() > 0.01 || self.base_viewport.pan != (0.0, 0.0)
@@ -286,7 +294,7 @@ impl Canvas {
                 .map(|layer| {
                     let default_size = layer.widget.descriptor().default_size;
                     layer.size != default_size
-                        || layer.position != default_widget_position(lcd_size, default_size)
+                        || layer.position != default_widget_position(resolution, default_size)
                 })
                 .unwrap_or(false),
         }
@@ -365,29 +373,42 @@ impl Canvas {
         changed
     }
 
-    fn clamp_base_pan(&mut self, source_size: (u32, u32)) {
+    fn clamp_base_pan(&mut self, source_size: (u32, u32), resolution: Resolution) {
         let (sw, sh) = (source_size.0 as f32, source_size.1 as f32);
-        let short = sw.min(sh);
         let vp = &mut self.base_viewport;
-        let vis = short / vp.zoom;
+        let (fit_w, fit_h) = fitted_viewport_size(source_size, resolution);
+        let vis_w = fit_w / vp.zoom;
+        let vis_h = fit_h / vp.zoom;
 
-        if vis <= sw && vis <= sh {
-            let max_pan_x = ((sw - vis) / 2.0).max(0.0);
-            let max_pan_y = ((sh - vis) / 2.0).max(0.0);
+        if vis_w <= sw && vis_h <= sh {
+            let max_pan_x = ((sw - vis_w) / 2.0).max(0.0);
+            let max_pan_y = ((sh - vis_h) / 2.0).max(0.0);
             vp.pan.0 = vp.pan.0.clamp(-max_pan_x, max_pan_x);
             vp.pan.1 = vp.pan.1.clamp(-max_pan_y, max_pan_y);
         } else {
-            let margin = short / vp.zoom * 0.375;
-            vp.pan.0 = vp.pan.0.clamp(-margin, margin);
-            vp.pan.1 = vp.pan.1.clamp(-margin, margin);
+            let margin_x = vis_w * 0.375;
+            let margin_y = vis_h * 0.375;
+            vp.pan.0 = vp.pan.0.clamp(-margin_x, margin_x);
+            vp.pan.1 = vp.pan.1.clamp(-margin_y, margin_y);
         }
     }
 }
 
-fn default_widget_position(lcd_size: u32, widget_size: (u32, u32)) -> (i32, i32) {
-    let lcd = lcd_size as i32;
+fn default_widget_position(resolution: Resolution, widget_size: (u32, u32)) -> (i32, i32) {
     (
-        (lcd - widget_size.0 as i32) / 2,
-        (lcd - widget_size.1 as i32) / 2,
+        (resolution.width as i32 - widget_size.0 as i32) / 2,
+        (resolution.height as i32 - widget_size.1 as i32) / 2,
     )
+}
+
+fn fitted_viewport_size(source_size: (u32, u32), resolution: Resolution) -> (f32, f32) {
+    let (sw, sh) = (source_size.0 as f32, source_size.1 as f32);
+    let target_ratio = resolution.width.max(1) as f32 / resolution.height.max(1) as f32;
+    let src_ratio = sw / sh;
+
+    if src_ratio > target_ratio {
+        (sh * target_ratio, sh)
+    } else {
+        (sw, sw / target_ratio)
+    }
 }

@@ -112,10 +112,13 @@ fn preview_card<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Element<'a, Messag
 }
 
 fn preview_canvas(app: &CoolCooler) -> Element<'_, Message> {
-    let lcd_size = app.lcd_size() as f32;
+    let resolution = app.lcd_resolution();
     let handle = app.preview.clone().unwrap_or_else(|| {
-        let lcd = app.lcd_size();
-        circular_preview_from_rgba(RgbaImage::from_pixel(lcd, lcd, Rgba([0, 0, 0, 255])))
+        circular_preview_from_rgba(RgbaImage::from_pixel(
+            resolution.width,
+            resolution.height,
+            Rgba([0, 0, 0, 255]),
+        ))
     });
     let is_widget_selected = app.canvas.active_widget_layer().is_some();
     let cursor_style = if app.dragging {
@@ -128,12 +131,16 @@ fn preview_canvas(app: &CoolCooler) -> Element<'_, Message> {
 
     row![
         iced::widget::space().width(Length::Fill),
-        mouse_area(iced::widget::image(handle).width(lcd_size).height(lcd_size),)
-            .on_scroll(Message::Scroll)
-            .on_press(Message::DragStart)
-            .on_release(Message::DragEnd)
-            .on_move(Message::DragMove)
-            .interaction(cursor_style),
+        mouse_area(
+            iced::widget::image(handle)
+                .width(resolution.width as f32)
+                .height(resolution.height as f32),
+        )
+        .on_scroll(Message::Scroll)
+        .on_press(Message::DragStart)
+        .on_release(Message::DragEnd)
+        .on_move(Message::DragMove)
+        .interaction(cursor_style),
         iced::widget::space().width(Length::Fill),
     ]
     .into()
@@ -163,7 +170,7 @@ fn canvas_header<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Element<'a, Messa
 }
 
 fn canvas_can_reset(app: &CoolCooler) -> bool {
-    app.canvas.active_layer_can_reset(app.lcd_size())
+    app.canvas.active_layer_can_reset(app.lcd_resolution())
 }
 
 fn canvas_reset_status(app: &CoolCooler) -> String {

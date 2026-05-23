@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use canvas::{Canvas, LayerSelection, Viewport};
 use composition::{CanvasPolicy, SourceKind};
+use coolcooler_core::Resolution;
 use display_session::DisplayController;
 use iced::{mouse, window, Color, Element, Point, Subscription, Task, Theme};
 use image::{Rgba, RgbaImage};
@@ -214,18 +215,18 @@ impl CoolCooler {
         }
     }
 
-    fn lcd_size(&self) -> u32 {
-        self.display.info().resolution.width
+    fn lcd_resolution(&self) -> Resolution {
+        self.display.info().resolution
     }
 
-    /// Render the full composited 240x240 RGBA (base + widgets).
+    /// Render the full composited LCD RGBA frame (base + widgets).
     fn render_composited(&self) -> RgbaImage {
-        let lcd = self.lcd_size();
+        let resolution = self.lcd_resolution();
         let base = if let Some(src) = self.source_frames.get(self.current_frame) {
             let vp = self.canvas.base_viewport();
             render_base_rgba(&src.rgba, self.display.info(), vp.zoom, vp.pan)
         } else {
-            RgbaImage::from_pixel(lcd, lcd, Rgba([0, 0, 0, 255]))
+            RgbaImage::from_pixel(resolution.width, resolution.height, Rgba([0, 0, 0, 255]))
         };
         self.canvas.composite(base, &self.widget_ctx)
     }
@@ -504,10 +505,11 @@ impl CoolCooler {
                 };
                 let factor = 1.1_f32.powf(y);
 
-                if self
-                    .canvas
-                    .zoom_active_layer(factor, self.current_source_size())
-                {
+                if self.canvas.zoom_active_layer(
+                    factor,
+                    self.lcd_resolution(),
+                    self.current_source_size(),
+                ) {
                     self.commit_frame();
                 }
             }
@@ -522,7 +524,7 @@ impl CoolCooler {
                         let dy = pos.y - last.y;
                         if self.canvas.drag_active_layer(
                             (dx, dy),
-                            self.lcd_size(),
+                            self.lcd_resolution(),
                             self.current_source_size(),
                         ) {
                             self.commit_frame();
@@ -536,7 +538,7 @@ impl CoolCooler {
                 self.last_cursor = None;
             }
             Message::ResetView => {
-                if self.canvas.reset_active_layer(self.lcd_size()) {
+                if self.canvas.reset_active_layer(self.lcd_resolution()) {
                     self.commit_frame();
                 }
             }
@@ -552,7 +554,7 @@ impl CoolCooler {
                     return Task::none();
                 }
                 if let Some(spec) = self.widget_catalog.get(catalog_idx) {
-                    let id = self.canvas.add_widget(spec, self.lcd_size());
+                    let id = self.canvas.add_widget(spec, self.lcd_resolution());
                     self.canvas.select_layer(LayerSelection::Widget(id));
                     self.commit_frame();
                 }
