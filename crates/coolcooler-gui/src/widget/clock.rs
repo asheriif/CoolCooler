@@ -2,7 +2,7 @@ use chrono::Local;
 use image::RgbaImage;
 
 use super::text::TextState;
-use super::{LcdWidget, WidgetContext, WidgetControls, WidgetDescriptor, WidgetEdit};
+use super::{LcdWidget, WidgetContext, WidgetControl, WidgetDescriptor, WidgetEdit};
 
 pub const CLOCK_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
     name: "Time",
@@ -44,16 +44,16 @@ impl LcdWidget for Clock {
         self.text.set_text(new_text)
     }
 
-    fn config(&self) -> serde_json::Value {
+    fn preset_config(&self) -> serde_json::Value {
         self.text.config_value(false)
     }
 
-    fn controls(&self) -> WidgetControls<'_> {
+    fn controls(&self) -> Vec<WidgetControl<'_>> {
         self.text.controls(false)
     }
 
-    fn apply_config_value(&mut self, config: &serde_json::Value) -> Result<(), &'static str> {
-        self.text.apply_config_value(config, false)
+    fn apply_preset_config(&mut self, config: &serde_json::Value) -> Result<(), &'static str> {
+        self.text.apply_preset_config(config, false)
     }
 
     fn apply_edit(&mut self, edit: WidgetEdit) {

@@ -120,6 +120,7 @@ enum Message {
     SetWidgetTextColor([u8; 4]),
     SetWidgetFont(String),
     SetWidgetText(String),
+    SetWidgetThickness(u32),
     ShowSaveDialog,
     ShowLoadDialog,
     CloseSaveDialog,

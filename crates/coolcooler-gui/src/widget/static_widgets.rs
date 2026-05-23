@@ -3,9 +3,12 @@ use imageproc::drawing::{draw_filled_circle_mut, draw_hollow_circle_mut};
 
 use super::text::{from_value, to_value, TextState};
 use super::{
-    CircleWidgetConfig, ColorWidgetConfig, LcdWidget, WidgetContext, WidgetControls,
+    CircleWidgetConfig, ColorWidgetConfig, LcdWidget, WidgetContext, WidgetControl,
     WidgetDescriptor, WidgetEdit,
 };
+
+const CIRCLE_MIN_THICKNESS: u32 = 1;
+const CIRCLE_MAX_THICKNESS: u32 = 20;
 
 // =============================================================================
 // Free Text
@@ -39,16 +42,16 @@ impl LcdWidget for FreeText {
         self.text.render(width, height, 0.7)
     }
 
-    fn config(&self) -> serde_json::Value {
+    fn preset_config(&self) -> serde_json::Value {
         self.text.config_value(true)
     }
 
-    fn controls(&self) -> WidgetControls<'_> {
+    fn controls(&self) -> Vec<WidgetControl<'_>> {
         self.text.controls(true)
     }
 
-    fn apply_config_value(&mut self, config: &serde_json::Value) -> Result<(), &'static str> {
-        self.text.apply_config_value(config, true)
+    fn apply_preset_config(&mut self, config: &serde_json::Value) -> Result<(), &'static str> {
+        self.text.apply_preset_config(config, true)
     }
 
     fn apply_edit(&mut self, edit: WidgetEdit) {
@@ -97,15 +100,15 @@ impl LcdWidget for HorizontalLine {
         img
     }
 
-    fn config(&self) -> serde_json::Value {
+    fn preset_config(&self) -> serde_json::Value {
         to_value(ColorWidgetConfig { color: self.color })
     }
 
-    fn controls(&self) -> WidgetControls<'_> {
-        WidgetControls::color(self.color)
+    fn controls(&self) -> Vec<WidgetControl<'_>> {
+        vec![WidgetControl::Color(self.color)]
     }
 
-    fn apply_config_value(&mut self, config: &serde_json::Value) -> Result<(), &'static str> {
+    fn apply_preset_config(&mut self, config: &serde_json::Value) -> Result<(), &'static str> {
         let config: ColorWidgetConfig = from_value(config)?;
         self.color = config.color;
         Ok(())
@@ -159,15 +162,15 @@ impl LcdWidget for VerticalLine {
         img
     }
 
-    fn config(&self) -> serde_json::Value {
+    fn preset_config(&self) -> serde_json::Value {
         to_value(ColorWidgetConfig { color: self.color })
     }
 
-    fn controls(&self) -> WidgetControls<'_> {
-        WidgetControls::color(self.color)
+    fn controls(&self) -> Vec<WidgetControl<'_>> {
+        vec![WidgetControl::Color(self.color)]
     }
 
-    fn apply_config_value(&mut self, config: &serde_json::Value) -> Result<(), &'static str> {
+    fn apply_preset_config(&mut self, config: &serde_json::Value) -> Result<(), &'static str> {
         let config: ColorWidgetConfig = from_value(config)?;
         self.color = config.color;
         Ok(())
@@ -232,27 +235,42 @@ impl LcdWidget for CircleGauge {
         img
     }
 
-    fn config(&self) -> serde_json::Value {
+    fn preset_config(&self) -> serde_json::Value {
         to_value(CircleWidgetConfig {
             color: self.color,
             thickness: self.thickness,
         })
     }
 
-    fn controls(&self) -> WidgetControls<'_> {
-        WidgetControls::color(self.color)
+    fn controls(&self) -> Vec<WidgetControl<'_>> {
+        vec![
+            WidgetControl::Color(self.color),
+            WidgetControl::Thickness {
+                value: self.thickness,
+                min: CIRCLE_MIN_THICKNESS,
+                max: CIRCLE_MAX_THICKNESS,
+            },
+        ]
     }
 
-    fn apply_config_value(&mut self, config: &serde_json::Value) -> Result<(), &'static str> {
+    fn apply_preset_config(&mut self, config: &serde_json::Value) -> Result<(), &'static str> {
         let config: CircleWidgetConfig = from_value(config)?;
         self.color = config.color;
-        self.thickness = config.thickness;
+        self.thickness = config
+            .thickness
+            .clamp(CIRCLE_MIN_THICKNESS, CIRCLE_MAX_THICKNESS);
         Ok(())
     }
 
     fn apply_edit(&mut self, edit: WidgetEdit) {
-        if let WidgetEdit::Color(color) = edit {
-            self.color = color;
+        match edit {
+            WidgetEdit::Color(color) => {
+                self.color = color;
+            }
+            WidgetEdit::Thickness(thickness) => {
+                self.thickness = thickness.clamp(CIRCLE_MIN_THICKNESS, CIRCLE_MAX_THICKNESS);
+            }
+            WidgetEdit::Font(_) | WidgetEdit::Text(_) => {}
         }
     }
 }
@@ -299,15 +317,15 @@ impl LcdWidget for FilledCircle {
         img
     }
 
-    fn config(&self) -> serde_json::Value {
+    fn preset_config(&self) -> serde_json::Value {
         to_value(ColorWidgetConfig { color: self.color })
     }
 
-    fn controls(&self) -> WidgetControls<'_> {
-        WidgetControls::color(self.color)
+    fn controls(&self) -> Vec<WidgetControl<'_>> {
+        vec![WidgetControl::Color(self.color)]
     }
 
-    fn apply_config_value(&mut self, config: &serde_json::Value) -> Result<(), &'static str> {
+    fn apply_preset_config(&mut self, config: &serde_json::Value) -> Result<(), &'static str> {
         let config: ColorWidgetConfig = from_value(config)?;
         self.color = config.color;
         Ok(())

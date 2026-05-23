@@ -5,7 +5,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{fonts, TextWidgetConfig, WidgetControls, WidgetEdit};
+use super::{fonts, TextWidgetConfig, WidgetControl, WidgetEdit};
 
 #[derive(Debug, Clone)]
 pub(super) struct TextState {
@@ -50,15 +50,18 @@ impl TextState {
         })
     }
 
-    pub(super) fn controls(&self, allow_text: bool) -> WidgetControls<'_> {
-        WidgetControls::text(
-            self.color,
-            &self.font_name,
-            allow_text.then_some(self.text.as_str()),
-        )
+    pub(super) fn controls(&self, allow_text: bool) -> Vec<WidgetControl<'_>> {
+        let mut controls = vec![
+            WidgetControl::Color(self.color),
+            WidgetControl::Font(&self.font_name),
+        ];
+        if allow_text {
+            controls.push(WidgetControl::Text(self.text.as_str()));
+        }
+        controls
     }
 
-    pub(super) fn apply_config_value(
+    pub(super) fn apply_preset_config(
         &mut self,
         config: &Value,
         allow_text: bool,
@@ -88,6 +91,7 @@ impl TextState {
                     self.text = text;
                 }
             }
+            WidgetEdit::Thickness(_) => {}
         }
     }
 

@@ -1,7 +1,7 @@
 use image::RgbaImage;
 
 use super::text::TextState;
-use super::{LcdWidget, WidgetContext, WidgetControls, WidgetDescriptor, WidgetEdit};
+use super::{LcdWidget, WidgetContext, WidgetControl, WidgetDescriptor, WidgetEdit};
 
 pub const CPU_USAGE_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
     name: "CPU Usage",
@@ -72,19 +72,19 @@ macro_rules! sysinfo_text_widget {
                 self.text.set_text(new_text)
             }
 
-            fn config(&self) -> serde_json::Value {
+            fn preset_config(&self) -> serde_json::Value {
                 self.text.config_value(false)
             }
 
-            fn controls(&self) -> WidgetControls<'_> {
+            fn controls(&self) -> Vec<WidgetControl<'_>> {
                 self.text.controls(false)
             }
 
-            fn apply_config_value(
+            fn apply_preset_config(
                 &mut self,
                 config: &serde_json::Value,
             ) -> Result<(), &'static str> {
-                self.text.apply_config_value(config, false)
+                self.text.apply_preset_config(config, false)
             }
 
             fn apply_edit(&mut self, edit: WidgetEdit) {

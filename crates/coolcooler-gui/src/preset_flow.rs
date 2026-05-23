@@ -25,7 +25,7 @@ impl CoolCooler {
                 position: layer.position,
                 size: layer.size,
                 opacity: layer.opacity,
-                config: layer.widget.config(),
+                config: layer.widget.preset_config(),
             })
             .collect();
 
@@ -56,7 +56,7 @@ impl CoolCooler {
                 continue;
             };
             let mut w = spec.create();
-            if w.apply_config_value(&wd.config).is_err() {
+            if w.apply_preset_config(&wd.config).is_err() {
                 skipped_widgets += 1;
                 continue;
             }

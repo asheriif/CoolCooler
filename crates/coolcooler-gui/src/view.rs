@@ -6,6 +6,7 @@ use image::{Rgba, RgbaImage};
 
 use crate::rendering::circular_preview_from_rgba;
 use crate::style::AppColors;
+use crate::widget::WidgetControl;
 use crate::{widget, CoolCooler, LayerOption, Message};
 
 pub(crate) fn view(app: &CoolCooler, _window_id: window::Id) -> Element<'_, Message> {
@@ -230,17 +231,17 @@ fn layer_controls<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Element<'a, Mess
 fn widget_config_card<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Option<Element<'a, Message>> {
     app.canvas.active_widget_layer().map(|layer| {
         let opacity_val = layer.opacity as f32 / 255.0;
-        let controls = layer.widget.controls();
         let mut config_items = column![opacity_control(opacity_val, c)].spacing(8);
 
-        if let Some(color) = controls.color {
-            config_items = config_items.push(color_controls(color, c));
-        }
-        if let Some(font_name) = controls.font_name {
-            config_items = config_items.push(font_control(font_name.to_string(), c));
-        }
-        if let Some(text) = controls.editable_text {
-            config_items = config_items.push(text_control(text.to_string(), c));
+        for control in layer.widget.controls() {
+            config_items = config_items.push(match control {
+                WidgetControl::Color(color) => color_controls(color, c),
+                WidgetControl::Font(font_name) => font_control(font_name.to_string(), c),
+                WidgetControl::Text(text) => text_control(text.to_string(), c),
+                WidgetControl::Thickness { value, min, max } => {
+                    thickness_control(value, min, max, c)
+                }
+            });
         }
 
         card(config_items, c).into()
@@ -334,6 +335,19 @@ fn text_control(current_text: String, c: &AppColors) -> Element<'_, Message> {
             .on_input(Message::SetWidgetText)
             .size(12)
             .width(Length::Fill),
+    ]
+    .spacing(8)
+    .align_y(iced::Alignment::Center)
+    .into()
+}
+
+fn thickness_control(value: u32, min: u32, max: u32, c: &AppColors) -> Element<'_, Message> {
+    row![
+        text("Thickness").size(12).color(c.text_dim).width(60),
+        slider(min..=max, value, Message::SetWidgetThickness)
+            .step(1u32)
+            .width(Length::Fill),
+        text(value.to_string()).size(11).color(c.text_dim).width(35),
     ]
     .spacing(8)
     .align_y(iced::Alignment::Center)

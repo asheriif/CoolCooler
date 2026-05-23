@@ -33,28 +33,12 @@ pub struct WidgetContext {
     pub sysinfo: sysinfo_backend::SysInfoData,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct WidgetControls<'a> {
-    pub color: Option<[u8; 4]>,
-    pub font_name: Option<&'a str>,
-    pub editable_text: Option<&'a str>,
-}
-
-impl<'a> WidgetControls<'a> {
-    pub fn color(color: [u8; 4]) -> Self {
-        Self {
-            color: Some(color),
-            ..Self::default()
-        }
-    }
-
-    pub fn text(color: [u8; 4], font_name: &'a str, editable_text: Option<&'a str>) -> Self {
-        Self {
-            color: Some(color),
-            font_name: Some(font_name),
-            editable_text,
-        }
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WidgetControl<'a> {
+    Color([u8; 4]),
+    Font(&'a str),
+    Text(&'a str),
+    Thickness { value: u32, min: u32, max: u32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +69,7 @@ pub enum WidgetEdit {
     Color([u8; 4]),
     Font(String),
     Text(String),
+    Thickness(u32),
 }
 
 /// Trait for LCD canvas widgets.
@@ -112,15 +97,15 @@ pub trait LcdWidget: fmt::Debug + Send {
         false
     }
 
-    fn config(&self) -> Value {
+    fn preset_config(&self) -> Value {
         Value::Null
     }
 
-    fn controls(&self) -> WidgetControls<'_> {
-        WidgetControls::default()
+    fn controls(&self) -> Vec<WidgetControl<'_>> {
+        Vec::new()
     }
 
-    fn apply_config_value(&mut self, config: &Value) -> Result<(), &'static str> {
+    fn apply_preset_config(&mut self, config: &Value) -> Result<(), &'static str> {
         if config.is_null() {
             Ok(())
         } else {
@@ -307,7 +292,7 @@ mod tests {
     fn widget_config_is_owned_by_widget_type() {
         let line = static_widgets::HorizontalLine::new();
         assert_eq!(
-            line.config(),
+            line.preset_config(),
             json!({
                 "color": [255, 255, 255, 200]
             })
@@ -315,7 +300,7 @@ mod tests {
 
         let circle = static_widgets::CircleGauge::new();
         assert_eq!(
-            circle.config(),
+            circle.preset_config(),
             json!({
                 "color": [0, 180, 255, 220],
                 "thickness": 3
@@ -328,7 +313,7 @@ mod tests {
         let mut line = static_widgets::HorizontalLine::new();
 
         assert!(line
-            .apply_config_value(&json!({
+            .apply_preset_config(&json!({
                 "text": "wrong",
                 "color": [255, 255, 255, 255],
                 "font": "default"
@@ -341,7 +326,7 @@ mod tests {
         let mut line = static_widgets::HorizontalLine::new();
 
         assert!(line
-            .apply_config_value(&json!({
+            .apply_preset_config(&json!({
                 "color": [255, 255, 255, 255],
                 "future": true
             }))
@@ -353,11 +338,15 @@ mod tests {
         let clock = clock::Clock::new();
         let controls = clock.controls();
 
-        assert_eq!(controls.color, Some([255, 255, 255, 255]));
-        assert_eq!(controls.font_name, Some(fonts::DEFAULT_FONT));
-        assert_eq!(controls.editable_text, None);
         assert_eq!(
-            clock.config(),
+            controls,
+            vec![
+                WidgetControl::Color([255, 255, 255, 255]),
+                WidgetControl::Font(fonts::DEFAULT_FONT)
+            ]
+        );
+        assert_eq!(
+            clock.preset_config(),
             json!({
                 "color": [255, 255, 255, 255],
                 "font": fonts::DEFAULT_FONT
@@ -370,6 +359,18 @@ mod tests {
         let free_text = static_widgets::FreeText::new();
         let controls = free_text.controls();
 
-        assert_eq!(controls.editable_text, Some("Text"));
+        assert!(controls.contains(&WidgetControl::Text("Text")));
+    }
+
+    #[test]
+    fn circle_exposes_thickness_control() {
+        let circle = static_widgets::CircleGauge::new();
+        let controls = circle.controls();
+
+        assert!(controls.contains(&WidgetControl::Thickness {
+            value: 3,
+            min: 1,
+            max: 20,
+        }));
     }
 }

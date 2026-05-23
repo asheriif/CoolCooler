@@ -71,6 +71,10 @@ impl CoolCooler {
                 self.edit_active_widget(widget::WidgetEdit::Text(text));
                 Task::none()
             }
+            Message::SetWidgetThickness(thickness) => {
+                self.edit_active_widget(widget::WidgetEdit::Thickness(thickness));
+                Task::none()
+            }
             Message::ShowSaveDialog => {
                 self.save_requested();
                 Task::none()
