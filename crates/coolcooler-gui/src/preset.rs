@@ -310,7 +310,7 @@ pub fn cleanup_stale_internal_dirs() {
 }
 
 fn cleanup_stale_internal_dirs_in(dir: &Path) {
-    let Ok(entries) = fs::read_dir(&dir) else {
+    let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
 
@@ -363,10 +363,6 @@ fn is_hidden_or_internal_folder(folder: &str) -> bool {
 
 fn is_internal_folder(folder: &str) -> bool {
     folder.starts_with('.') && (folder.contains(STAGING_MARKER) || folder.contains(BACKUP_MARKER))
-}
-
-fn live_folder_for_internal(folder: &str) -> Option<&str> {
-    internal_folder_parts(folder).map(|(live_folder, _)| live_folder)
 }
 
 fn internal_folder_parts(folder: &str) -> Option<(&str, InternalPresetKind)> {
@@ -510,9 +506,15 @@ mod tests {
 
     #[test]
     fn internal_folder_names_map_back_to_live_folder() {
-        assert_eq!(live_folder_for_internal(".demo.staging.123"), Some("demo"));
-        assert_eq!(live_folder_for_internal(".demo.backup.123"), Some("demo"));
-        assert_eq!(live_folder_for_internal("demo"), None);
+        assert_eq!(
+            internal_folder_parts(".demo.staging.123").map(|(folder, _)| folder),
+            Some("demo")
+        );
+        assert_eq!(
+            internal_folder_parts(".demo.backup.123").map(|(folder, _)| folder),
+            Some("demo")
+        );
+        assert_eq!(internal_folder_parts("demo"), None);
     }
 
     #[test]
