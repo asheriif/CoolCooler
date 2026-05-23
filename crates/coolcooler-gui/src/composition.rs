@@ -1,4 +1,4 @@
-use coolcooler_driver::{widgets_allowed, DisplayCapability};
+use coolcooler_driver::DisplayCapability;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceKind {
@@ -14,10 +14,6 @@ impl SourceKind {
             Self::Static
         }
     }
-
-    fn is_animated(self) -> bool {
-        matches!(self, Self::Animated)
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -28,9 +24,7 @@ pub(crate) struct CanvasPolicy {
 impl CanvasPolicy {
     pub(crate) fn for_content(capability: Option<DisplayCapability>, source: SourceKind) -> Self {
         Self {
-            widgets_allowed: capability
-                .map(|capability| widgets_allowed(capability, source.is_animated()))
-                .unwrap_or(true),
+            widgets_allowed: widgets_allowed(capability, source),
         }
     }
 
@@ -41,5 +35,49 @@ impl CanvasPolicy {
     pub(crate) fn widget_block_message(self) -> Option<&'static str> {
         (!self.widgets_allowed)
             .then_some("Widgets with animated backgrounds are not supported on this device.")
+    }
+}
+
+fn widgets_allowed(capability: Option<DisplayCapability>, source: SourceKind) -> bool {
+    !matches!(
+        (capability, source),
+        (Some(DisplayCapability::FileTransfer), SourceKind::Animated)
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn widgets_blocked_on_file_transfer_with_animated_background() {
+        assert!(!CanvasPolicy::for_content(
+            Some(DisplayCapability::FileTransfer),
+            SourceKind::Animated
+        )
+        .widgets_allowed());
+    }
+
+    #[test]
+    fn widgets_allowed_on_file_transfer_with_static_background() {
+        assert!(CanvasPolicy::for_content(
+            Some(DisplayCapability::FileTransfer),
+            SourceKind::Static
+        )
+        .widgets_allowed());
+    }
+
+    #[test]
+    fn widgets_allowed_when_device_capability_is_unknown() {
+        assert!(CanvasPolicy::for_content(None, SourceKind::Animated).widgets_allowed());
+    }
+
+    #[test]
+    fn widgets_allowed_on_streaming_with_animated_background() {
+        assert!(CanvasPolicy::for_content(
+            Some(DisplayCapability::Streaming),
+            SourceKind::Animated
+        )
+        .widgets_allowed());
     }
 }

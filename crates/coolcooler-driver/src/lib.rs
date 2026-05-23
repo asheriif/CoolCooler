@@ -62,14 +62,6 @@ impl DisplayFrameEncoder {
     }
 }
 
-/// Whether widget overlays are allowed for the given device capability and content.
-///
-/// Widgets are blocked when the background is animated (GIF) on a file-transfer
-/// device, because those devices can't stream fast enough for smooth playback.
-pub fn widgets_allowed(capability: DisplayCapability, is_animated: bool) -> bool {
-    !(capability == DisplayCapability::FileTransfer && is_animated)
-}
-
 /// Unified device driver.
 ///
 /// Enum dispatch over native (streaming) and liquidctl (file-transfer) backends.
@@ -265,25 +257,4 @@ mod tests {
         );
     }
 
-    // -- widgets_allowed tests --
-
-    #[test]
-    fn widgets_blocked_on_file_transfer_with_animated_background() {
-        assert!(!widgets_allowed(DisplayCapability::FileTransfer, true));
-    }
-
-    #[test]
-    fn widgets_allowed_on_file_transfer_with_static_background() {
-        assert!(widgets_allowed(DisplayCapability::FileTransfer, false));
-    }
-
-    #[test]
-    fn widgets_allowed_on_streaming_with_animated_background() {
-        assert!(widgets_allowed(DisplayCapability::Streaming, true));
-    }
-
-    #[test]
-    fn widgets_allowed_on_streaming_with_static_background() {
-        assert!(widgets_allowed(DisplayCapability::Streaming, false));
-    }
 }
