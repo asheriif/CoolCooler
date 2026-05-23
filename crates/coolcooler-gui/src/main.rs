@@ -97,6 +97,8 @@ struct CoolCooler {
 
     status_message: String,
     display_session: Option<DisplaySession>,
+    stopping_display_session: Option<DisplaySession>,
+    pending_display_start: bool,
 
     // Tray icon
     _tray_handle: tray::TrayHandle,
@@ -143,6 +145,7 @@ enum Message {
     ToggleTheme,
     WindowClosed(window::Id),
     TrayPoll,
+    DisplayStopPoll,
     ShowWindow,
     Quit,
 }
@@ -193,6 +196,8 @@ impl CoolCooler {
             last_preset_click: None,
             status_message: String::new(),
             display_session: None,
+            stopping_display_session: None,
+            pending_display_start: false,
             _tray_handle: tray_handle,
             tray_rx: Arc::new(Mutex::new(tray_rx)),
             window_id: Some(id),
@@ -427,7 +432,16 @@ impl CoolCooler {
 
     /// Start (or restart) the device display thread.
     fn start_display(&mut self) {
-        self.stop_display();
+        self.request_display_stop();
+        if self.stopping_display_session.is_some() {
+            self.pending_display_start = true;
+            return;
+        }
+
+        self.start_display_now();
+    }
+
+    fn start_display_now(&mut self) {
         if !self.driver_connected {
             return;
         }
@@ -441,8 +455,30 @@ impl CoolCooler {
     }
 
     fn stop_display(&mut self) {
+        self.pending_display_start = false;
+        self.request_display_stop();
+    }
+
+    fn request_display_stop(&mut self) {
         if let Some(session) = self.display_session.take() {
-            session.stop();
+            session.request_stop();
+            self.stopping_display_session = Some(session);
+        }
+    }
+
+    fn reap_stopped_display(&mut self) {
+        let stopped = self
+            .stopping_display_session
+            .as_mut()
+            .is_some_and(DisplaySession::join_if_finished);
+        if !stopped {
+            return;
+        }
+
+        self.stopping_display_session = None;
+        if self.pending_display_start {
+            self.pending_display_start = false;
+            self.start_display_now();
         }
     }
 
@@ -853,6 +889,9 @@ impl CoolCooler {
                     return self.update(Message::ShowWindow);
                 }
             }
+            Message::DisplayStopPoll => {
+                self.reap_stopped_display();
+            }
             Message::WindowClosed(id) => {
                 if self.window_id == Some(id) {
                     self.window_id = None;
@@ -912,6 +951,12 @@ impl CoolCooler {
         let has_dynamic = self.canvas.layers.iter().any(|l| l.widget.is_dynamic());
         if has_dynamic {
             subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::WidgetTick));
+        }
+
+        if self.stopping_display_session.is_some() {
+            subs.push(
+                iced::time::every(Duration::from_millis(100)).map(|_| Message::DisplayStopPoll),
+            );
         }
 
         Subscription::batch(subs)

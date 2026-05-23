@@ -33,13 +33,22 @@ impl DisplaySession {
         }
     }
 
-    pub(crate) fn stop(mut self) {
-        self.request_stop();
-        self.join_in_background();
+    pub(crate) fn request_stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
     }
 
-    fn request_stop(&self) {
-        self.stop.store(true, Ordering::Relaxed);
+    pub(crate) fn is_finished(&self) -> bool {
+        self.join.as_ref().is_none_or(|join| join.is_finished())
+    }
+
+    pub(crate) fn join_if_finished(&mut self) -> bool {
+        if !self.is_finished() {
+            return false;
+        }
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+        true
     }
 
     fn join_in_background(&mut self) {
