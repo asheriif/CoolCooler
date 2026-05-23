@@ -2,10 +2,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use coolcooler_core::frame::{self, DEFAULT_JPEG_QUALITY};
 use coolcooler_core::{DeviceInfo, Resolution};
-use coolcooler_driver::{DisplayCapability, DisplayDriver};
-use image::{DynamicImage, RgbaImage};
+use coolcooler_driver::{DisplayCapability, DisplayDriver, DisplayFrame, DisplayFrameEncoder};
+use image::RgbaImage;
 
 pub(crate) struct DisplayController {
     state: DisplayState,
@@ -26,14 +25,14 @@ enum DisplayState {
 type SessionHandle = Box<dyn DisplaySessionHandle>;
 
 trait DisplaySessionHandle: Send {
-    fn submit_frame(&self, bytes: Vec<u8>);
+    fn submit_frame(&self, frame: DisplayFrame);
     fn request_stop(&self);
     fn join_if_finished(&mut self) -> bool;
 }
 
 struct PendingStart {
     driver: DisplayDriver,
-    frame: Vec<u8>,
+    frame: DisplayFrame,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +66,15 @@ impl DisplayStatus {
     fn capability(&self) -> Option<DisplayCapability> {
         match self {
             Self::Connected { capability, .. } => Some(*capability),
+            Self::Disconnected => None,
+        }
+    }
+
+    fn encoder(&self) -> Option<DisplayFrameEncoder> {
+        match self {
+            Self::Connected { info, capability } => {
+                Some(DisplayFrameEncoder::new(info.clone(), *capability))
+            }
             Self::Disconnected => None,
         }
     }
@@ -149,9 +157,8 @@ impl DisplayController {
         if let DisplayState::Running(session) = &self.state {
             if let Some(bytes) = self
                 .status
-                .info()
-                .zip(self.status.capability())
-                .and_then(|(info, capability)| encode_frame(composited, info, capability))
+                .encoder()
+                .and_then(|encoder| encoder.prepare(composited).ok())
             {
                 session.submit_frame(bytes);
             }
@@ -217,39 +224,21 @@ impl DisplayController {
             return None;
         };
         self.status = DisplayStatus::from_driver(&driver);
-        let frame = encode_frame(composited, driver.info(), driver.capability())?;
+        let frame = DisplayFrameEncoder::from_driver(&driver)
+            .prepare(composited)
+            .ok()?;
         Some(PendingStart { driver, frame })
-    }
-}
-
-fn encode_frame(
-    composited: &RgbaImage,
-    info: &DeviceInfo,
-    capability: DisplayCapability,
-) -> Option<Vec<u8>> {
-    match capability {
-        DisplayCapability::Streaming => {
-            let rgb = DynamicImage::ImageRgba8(composited.clone()).to_rgb8();
-            frame::encode_resized(&rgb, info.rotation, DEFAULT_JPEG_QUALITY).ok()
-        }
-        DisplayCapability::FileTransfer => {
-            let mut buf = std::io::Cursor::new(Vec::new());
-            DynamicImage::ImageRgba8(composited.clone())
-                .write_to(&mut buf, image::ImageFormat::Png)
-                .ok()
-                .map(|()| buf.into_inner())
-        }
     }
 }
 
 pub(crate) struct DisplaySession {
     stop: Arc<AtomicBool>,
-    shared_frame: Arc<Mutex<Vec<u8>>>,
+    shared_frame: Arc<Mutex<DisplayFrame>>,
     join: Option<thread::JoinHandle<()>>,
 }
 
 impl DisplaySession {
-    pub(crate) fn start(driver: DisplayDriver, initial_frame: Vec<u8>) -> Self {
+    pub(crate) fn start(driver: DisplayDriver, initial_frame: DisplayFrame) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let shared_frame = Arc::new(Mutex::new(initial_frame));
         let thread_frame = Arc::clone(&shared_frame);
@@ -265,7 +254,7 @@ impl DisplaySession {
         }
     }
 
-    fn submit_frame(&self, bytes: Vec<u8>) {
+    fn submit_frame(&self, bytes: DisplayFrame) {
         if let Ok(mut frame) = self.shared_frame.lock() {
             *frame = bytes;
         }
@@ -299,7 +288,7 @@ impl DisplaySession {
 }
 
 impl DisplaySessionHandle for DisplaySession {
-    fn submit_frame(&self, bytes: Vec<u8>) {
+    fn submit_frame(&self, bytes: DisplayFrame) {
         Self::submit_frame(self, bytes);
     }
 
@@ -328,7 +317,7 @@ mod tests {
         finished: bool,
         stop_requests: Arc<AtomicUsize>,
         joined: Arc<AtomicUsize>,
-        submitted: Arc<Mutex<Vec<Vec<u8>>>>,
+        submitted: Arc<Mutex<Vec<DisplayFrame>>>,
     }
 
     impl FakeSession {
@@ -343,8 +332,8 @@ mod tests {
     }
 
     impl DisplaySessionHandle for FakeSession {
-        fn submit_frame(&self, bytes: Vec<u8>) {
-            self.submitted.lock().unwrap().push(bytes);
+        fn submit_frame(&self, frame: DisplayFrame) {
+            self.submitted.lock().unwrap().push(frame);
         }
 
         fn request_stop(&self) {

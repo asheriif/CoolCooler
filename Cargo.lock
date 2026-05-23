@@ -768,6 +768,7 @@ dependencies = [
  "coolcooler-idcooling",
  "coolcooler-liquidctl",
  "hidapi",
+ "image",
 ]
 
 [[package]]

@@ -1,9 +1,11 @@
 mod detect;
 mod display_loop;
 
-use coolcooler_core::{CoolerLcd, DeviceInfo, Result};
+use coolcooler_core::frame::{self, DEFAULT_JPEG_QUALITY};
+use coolcooler_core::{CoolerLcd, DeviceInfo, Error, Result};
 use coolcooler_idcooling::Fx360;
 use coolcooler_liquidctl::LiquidctlDriver;
+use image::{DynamicImage, RgbaImage};
 
 pub use detect::{detect_device, match_liquidctl_device};
 pub use display_loop::run_display;
@@ -17,6 +19,47 @@ pub enum DisplayCapability {
     /// File-based update via liquidctl: updates are expensive (~1/sec).
     /// GIF backgrounds with widget overlays are NOT supported.
     FileTransfer,
+}
+
+/// Frame bytes prepared for a specific display backend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DisplayFrame {
+    StreamingJpeg(Vec<u8>),
+    FileTransferPng(Vec<u8>),
+}
+
+/// Driver-owned encoder for converting an RGBA canvas into backend frame bytes.
+#[derive(Debug, Clone)]
+pub struct DisplayFrameEncoder {
+    info: DeviceInfo,
+    capability: DisplayCapability,
+}
+
+impl DisplayFrameEncoder {
+    pub fn new(info: DeviceInfo, capability: DisplayCapability) -> Self {
+        Self { info, capability }
+    }
+
+    pub fn from_driver(driver: &DisplayDriver) -> Self {
+        Self::new(driver.info().clone(), driver.capability())
+    }
+
+    pub fn prepare(&self, composited: &RgbaImage) -> Result<DisplayFrame> {
+        match self.capability {
+            DisplayCapability::Streaming => {
+                let rgb = DynamicImage::ImageRgba8(composited.clone()).to_rgb8();
+                frame::encode_resized(&rgb, self.info.rotation, DEFAULT_JPEG_QUALITY)
+                    .map(DisplayFrame::StreamingJpeg)
+            }
+            DisplayCapability::FileTransfer => {
+                let mut buf = std::io::Cursor::new(Vec::new());
+                DynamicImage::ImageRgba8(composited.clone())
+                    .write_to(&mut buf, image::ImageFormat::Png)
+                    .map_err(|e| Error::Image(e.to_string()))?;
+                Ok(DisplayFrame::FileTransferPng(buf.into_inner()))
+            }
+        }
+    }
 }
 
 /// Whether widget overlays are allowed for the given device capability and content.
@@ -81,6 +124,7 @@ impl DisplayDriver {
 mod tests {
     use super::*;
     use coolcooler_liquidctl::DEVICE_REGISTRY;
+    use image::{Rgba, RgbaImage};
 
     // -- DisplayDriver enum tests --
 
@@ -106,6 +150,35 @@ mod tests {
             assert_eq!(info.resolution, def.resolution);
             assert_eq!(info.rotation, def.rotation);
         }
+    }
+
+    #[test]
+    fn frame_encoder_prepares_typed_streaming_frame() {
+        let driver = DisplayDriver::Native(Fx360::new());
+        let encoder = DisplayFrameEncoder::from_driver(&driver);
+        let composited = RgbaImage::from_pixel(240, 240, Rgba([255, 0, 0, 255]));
+
+        let frame = encoder.prepare(&composited).unwrap();
+
+        let DisplayFrame::StreamingJpeg(bytes) = frame else {
+            panic!("native encoder should produce JPEG streaming frames");
+        };
+        assert!(bytes.starts_with(&[0xFF, 0xD8]));
+    }
+
+    #[test]
+    fn frame_encoder_prepares_typed_file_transfer_frame() {
+        let def = &DEVICE_REGISTRY[0];
+        let driver = DisplayDriver::Liquidctl(LiquidctlDriver::new(def));
+        let encoder = DisplayFrameEncoder::from_driver(&driver);
+        let composited = RgbaImage::from_pixel(320, 320, Rgba([0, 0, 255, 255]));
+
+        let frame = encoder.prepare(&composited).unwrap();
+
+        let DisplayFrame::FileTransferPng(bytes) = frame else {
+            panic!("liquidctl encoder should produce PNG file-transfer frames");
+        };
+        assert!(bytes.starts_with(b"\x89PNG\r\n\x1A\n"));
     }
 
     #[test]

@@ -4,17 +4,14 @@ use std::time::{Duration, Instant};
 
 use coolcooler_core::CoolerLcd;
 
-use crate::DisplayDriver;
+use crate::{DisplayDriver, DisplayFrame};
 
 /// Run the appropriate display loop for the given driver.
-///
-/// For native (streaming) devices, the shared buffer carries JPEG bytes.
-/// For liquidctl (file-transfer) devices, the shared buffer carries PNG bytes.
 ///
 /// This function blocks until `stop` is set to `true`.
 pub fn run_display(
     mut driver: DisplayDriver,
-    shared_frame: Arc<Mutex<Vec<u8>>>,
+    shared_frame: Arc<Mutex<DisplayFrame>>,
     stop: &AtomicBool,
 ) {
     match &mut driver {
@@ -30,7 +27,11 @@ const RECONNECT_DELAY: Duration = Duration::from_secs(2);
 ///
 /// On USB errors (e.g. after system suspend/resume), the loop disconnects,
 /// waits, and attempts to reconnect rather than silently dying.
-fn streaming_loop(lcd: &mut impl CoolerLcd, shared_frame: Arc<Mutex<Vec<u8>>>, stop: &AtomicBool) {
+fn streaming_loop(
+    lcd: &mut impl CoolerLcd,
+    shared_frame: Arc<Mutex<DisplayFrame>>,
+    stop: &AtomicBool,
+) {
     if lcd.connect().is_err() {
         return;
     }
@@ -42,8 +43,10 @@ fn streaming_loop(lcd: &mut impl CoolerLcd, shared_frame: Arc<Mutex<Vec<u8>>>, s
 
     while !stop.load(Ordering::Relaxed) {
         if let Ok(frame) = shared_frame.lock() {
-            if !frame.is_empty() && *frame != current_jpeg {
-                current_jpeg = frame.clone();
+            if let DisplayFrame::StreamingJpeg(bytes) = &*frame {
+                if !bytes.is_empty() && bytes.as_slice() != current_jpeg.as_slice() {
+                    current_jpeg = bytes.clone();
+                }
             }
         }
 
@@ -91,7 +94,7 @@ fn reconnect(lcd: &mut impl CoolerLcd, stop: &AtomicBool) -> bool {
 /// writes it to a temp file and sends via liquidctl subprocess.
 fn file_transfer_loop(
     lc: &mut coolcooler_liquidctl::LiquidctlDriver,
-    shared_frame: Arc<Mutex<Vec<u8>>>,
+    shared_frame: Arc<Mutex<DisplayFrame>>,
     stop: &AtomicBool,
 ) {
     let poll_interval = Duration::from_millis(200);
@@ -101,13 +104,14 @@ fn file_transfer_loop(
     while !stop.load(Ordering::Relaxed) {
         let current = {
             match shared_frame.lock() {
-                Ok(frame) => {
-                    if frame.is_empty() || *frame == last_sent {
-                        None
-                    } else {
-                        Some(frame.clone())
+                Ok(frame) => match &*frame {
+                    DisplayFrame::FileTransferPng(png_data)
+                        if !png_data.is_empty() && png_data.as_slice() != last_sent.as_slice() =>
+                    {
+                        Some(png_data.clone())
                     }
-                }
+                    _ => None,
+                },
                 Err(_) => None,
             }
         };
