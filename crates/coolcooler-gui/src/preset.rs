@@ -187,24 +187,33 @@ pub fn save(
     });
 
     let preset_dir = dir.join(&folder_name);
-    fs::create_dir_all(&preset_dir).map_err(|e| format!("Failed to create preset dir: {e}"))?;
+    let staged_dir = unique_staging_dir(&dir, &folder_name);
+    fs::create_dir(&staged_dir).map_err(|e| format!("Failed to create preset staging dir: {e}"))?;
 
-    // Copy background image (skip if source doesn't exist or is the same file)
+    let result = write_preset_contents(&staged_dir, source_image_path, preview_rgba, data)
+        .and_then(|()| install_staged_preset(&staged_dir, &preset_dir));
+
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&staged_dir);
+    }
+
+    result.map(|()| folder_name)
+}
+
+fn write_preset_contents(
+    preset_dir: &Path,
+    source_image_path: Option<&Path>,
+    preview_rgba: &RgbaImage,
+    data: &PresetData,
+) -> Result<(), String> {
     if let Some(src) = source_image_path {
         if src.exists() {
             let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("png");
             let dest = preset_dir.join(format!("background.{ext}"));
-            let same_file = src
-                .canonicalize()
-                .and_then(|s| dest.canonicalize().map(|d| s == d))
-                .unwrap_or(false);
-            if !same_file {
-                fs::copy(src, &dest).map_err(|e| format!("Failed to copy background: {e}"))?;
-            }
+            fs::copy(src, &dest).map_err(|e| format!("Failed to copy background: {e}"))?;
         }
     }
 
-    // Save preview thumbnail as PNG
     let preview_path = preset_dir.join("preview.png");
     let mut png_buf = Vec::new();
     PngEncoder::new(&mut png_buf)
@@ -217,13 +226,53 @@ pub fn save(
         .map_err(|e| format!("Failed to encode preview: {e}"))?;
     fs::write(&preview_path, &png_buf).map_err(|e| format!("Failed to write preview: {e}"))?;
 
-    // Save config JSON
     let config_path = preset_dir.join("preset.json");
     let json =
         serde_json::to_string_pretty(data).map_err(|e| format!("Failed to serialize: {e}"))?;
     fs::write(&config_path, json).map_err(|e| format!("Failed to write config: {e}"))?;
 
-    Ok(folder_name)
+    Ok(())
+}
+
+fn install_staged_preset(staged_dir: &Path, preset_dir: &Path) -> Result<(), String> {
+    let backup_dir = preset_dir.with_file_name(format!(
+        ".{}.backup.{}",
+        preset_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("preset"),
+        unique_suffix()
+    ));
+
+    if preset_dir.exists() {
+        fs::rename(preset_dir, &backup_dir)
+            .map_err(|e| format!("Failed to stage existing preset for replacement: {e}"))?;
+    }
+
+    if let Err(e) = fs::rename(staged_dir, preset_dir) {
+        if backup_dir.exists() {
+            let _ = fs::rename(&backup_dir, preset_dir);
+        }
+        return Err(format!("Failed to install preset: {e}"));
+    }
+
+    if backup_dir.exists() {
+        let _ = fs::remove_dir_all(backup_dir);
+    }
+
+    Ok(())
+}
+
+fn unique_staging_dir(parent: &Path, folder_name: &str) -> PathBuf {
+    parent.join(format!(".{folder_name}.staging.{}", unique_suffix()))
+}
+
+fn unique_suffix() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("{}.{}", std::process::id(), nanos)
 }
 
 /// List all saved presets.
