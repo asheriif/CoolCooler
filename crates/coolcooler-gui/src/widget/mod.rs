@@ -14,6 +14,7 @@ use std::fmt;
 pub struct WidgetId(pub usize);
 
 /// Metadata describing a widget type for the catalog UI.
+#[derive(Debug, Clone, Copy)]
 pub struct WidgetDescriptor {
     /// Human-readable name shown in the catalog.
     pub name: &'static str,
@@ -92,9 +93,6 @@ pub trait LcdWidget: fmt::Debug + Send {
     /// Set the editable text content.
     fn set_text_content(&mut self, _text: String) {}
 
-    /// Unique type identifier for serialization (e.g., "clock", "cpu_usage").
-    fn type_id(&self) -> &'static str;
-
     /// Serialize widget-specific configuration to JSON.
     fn save_config(&self) -> Value {
         Value::Object(serde_json::Map::new())
@@ -102,54 +100,149 @@ pub trait LcdWidget: fmt::Debug + Send {
 
     /// Restore widget-specific configuration from JSON.
     fn load_config(&mut self, _config: &Value) {}
-
-    /// Create a new independent instance of this widget type.
-    fn create_instance(&self) -> Box<dyn LcdWidget>;
 }
 
-/// Create a widget instance from a type_id string.
-/// Returns None if the type_id is unknown.
-pub fn create_by_type_id(type_id: &str) -> Option<Box<dyn LcdWidget>> {
-    match type_id {
-        "free_text" => Some(Box::new(static_widgets::FreeText::new())),
-        "h_line" => Some(Box::new(static_widgets::HorizontalLine::new())),
-        "v_line" => Some(Box::new(static_widgets::VerticalLine::new())),
-        "circle" => Some(Box::new(static_widgets::CircleGauge::new())),
-        "filled_circle" => Some(Box::new(static_widgets::FilledCircle::new())),
-        "clock" => Some(Box::new(clock::Clock::new())),
-        "date" => Some(Box::new(date::DateWidget::new())),
-        "cpu_usage" => Some(Box::new(sysinfo_widgets::CpuUsage::new())),
-        "cpu_temp" => Some(Box::new(sysinfo_widgets::CpuTemp::new())),
-        "ram_usage" => Some(Box::new(sysinfo_widgets::RamUsage::new())),
-        "gpu_temp" => Some(Box::new(sysinfo_widgets::GpuTemp::new())),
-        "gpu_usage" => Some(Box::new(sysinfo_widgets::GpuUsage::new())),
-        _ => None,
+pub type WidgetFactory = fn() -> Box<dyn LcdWidget>;
+
+/// Canonical registry entry for a widget type.
+#[derive(Clone, Copy)]
+pub struct WidgetSpec {
+    pub type_id: &'static str,
+    pub descriptor: WidgetDescriptor,
+    factory: WidgetFactory,
+}
+
+impl WidgetSpec {
+    pub fn create(&self) -> Box<dyn LcdWidget> {
+        (self.factory)()
     }
 }
 
+fn free_text() -> Box<dyn LcdWidget> {
+    Box::new(static_widgets::FreeText::new())
+}
+
+fn horizontal_line() -> Box<dyn LcdWidget> {
+    Box::new(static_widgets::HorizontalLine::new())
+}
+
+fn vertical_line() -> Box<dyn LcdWidget> {
+    Box::new(static_widgets::VerticalLine::new())
+}
+
+fn circle_gauge() -> Box<dyn LcdWidget> {
+    Box::new(static_widgets::CircleGauge::new())
+}
+
+fn filled_circle() -> Box<dyn LcdWidget> {
+    Box::new(static_widgets::FilledCircle::new())
+}
+
+fn clock() -> Box<dyn LcdWidget> {
+    Box::new(clock::Clock::new())
+}
+
+fn date() -> Box<dyn LcdWidget> {
+    Box::new(date::DateWidget::new())
+}
+
+fn cpu_usage() -> Box<dyn LcdWidget> {
+    Box::new(sysinfo_widgets::CpuUsage::new())
+}
+
+fn cpu_temp() -> Box<dyn LcdWidget> {
+    Box::new(sysinfo_widgets::CpuTemp::new())
+}
+
+fn ram_usage() -> Box<dyn LcdWidget> {
+    Box::new(sysinfo_widgets::RamUsage::new())
+}
+
+fn gpu_temp() -> Box<dyn LcdWidget> {
+    Box::new(sysinfo_widgets::GpuTemp::new())
+}
+
+fn gpu_usage() -> Box<dyn LcdWidget> {
+    Box::new(sysinfo_widgets::GpuUsage::new())
+}
+
+pub static WIDGET_REGISTRY: &[WidgetSpec] = &[
+    WidgetSpec {
+        type_id: "free_text",
+        descriptor: static_widgets::FREE_TEXT_DESCRIPTOR,
+        factory: free_text,
+    },
+    WidgetSpec {
+        type_id: "h_line",
+        descriptor: static_widgets::HORIZONTAL_LINE_DESCRIPTOR,
+        factory: horizontal_line,
+    },
+    WidgetSpec {
+        type_id: "v_line",
+        descriptor: static_widgets::VERTICAL_LINE_DESCRIPTOR,
+        factory: vertical_line,
+    },
+    WidgetSpec {
+        type_id: "circle",
+        descriptor: static_widgets::CIRCLE_GAUGE_DESCRIPTOR,
+        factory: circle_gauge,
+    },
+    WidgetSpec {
+        type_id: "filled_circle",
+        descriptor: static_widgets::FILLED_CIRCLE_DESCRIPTOR,
+        factory: filled_circle,
+    },
+    WidgetSpec {
+        type_id: "clock",
+        descriptor: clock::CLOCK_DESCRIPTOR,
+        factory: clock,
+    },
+    WidgetSpec {
+        type_id: "date",
+        descriptor: date::DATE_DESCRIPTOR,
+        factory: date,
+    },
+    WidgetSpec {
+        type_id: "cpu_usage",
+        descriptor: sysinfo_widgets::CPU_USAGE_DESCRIPTOR,
+        factory: cpu_usage,
+    },
+    WidgetSpec {
+        type_id: "cpu_temp",
+        descriptor: sysinfo_widgets::CPU_TEMP_DESCRIPTOR,
+        factory: cpu_temp,
+    },
+    WidgetSpec {
+        type_id: "ram_usage",
+        descriptor: sysinfo_widgets::RAM_USAGE_DESCRIPTOR,
+        factory: ram_usage,
+    },
+    WidgetSpec {
+        type_id: "gpu_temp",
+        descriptor: sysinfo_widgets::GPU_TEMP_DESCRIPTOR,
+        factory: gpu_temp,
+    },
+    WidgetSpec {
+        type_id: "gpu_usage",
+        descriptor: sysinfo_widgets::GPU_USAGE_DESCRIPTOR,
+        factory: gpu_usage,
+    },
+];
+
+pub fn spec_by_type_id(type_id: &str) -> Option<&'static WidgetSpec> {
+    WIDGET_REGISTRY.iter().find(|spec| spec.type_id == type_id)
+}
+
 /// All available widget types for the catalog.
-pub fn catalog() -> Vec<Box<dyn LcdWidget>> {
-    vec![
-        Box::new(static_widgets::FreeText::new()),
-        Box::new(static_widgets::HorizontalLine::new()),
-        Box::new(static_widgets::VerticalLine::new()),
-        Box::new(static_widgets::CircleGauge::new()),
-        Box::new(static_widgets::FilledCircle::new()),
-        Box::new(clock::Clock::new()),
-        Box::new(date::DateWidget::new()),
-        Box::new(sysinfo_widgets::CpuUsage::new()),
-        Box::new(sysinfo_widgets::CpuTemp::new()),
-        Box::new(sysinfo_widgets::RamUsage::new()),
-        Box::new(sysinfo_widgets::GpuTemp::new()),
-        Box::new(sysinfo_widgets::GpuUsage::new()),
-    ]
+pub fn catalog() -> &'static [WidgetSpec] {
+    WIDGET_REGISTRY
 }
 
 /// All unique category names, in display order.
-pub fn categories(catalog: &[Box<dyn LcdWidget>]) -> Vec<&'static str> {
+pub fn categories(catalog: &[WidgetSpec]) -> Vec<&'static str> {
     let mut cats = Vec::new();
-    for w in catalog {
-        let cat = w.descriptor().category;
+    for spec in catalog {
+        let cat = spec.descriptor.category;
         if !cats.contains(&cat) {
             cats.push(cat);
         }

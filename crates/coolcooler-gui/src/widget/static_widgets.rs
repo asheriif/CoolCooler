@@ -10,6 +10,12 @@ use super::{LcdWidget, WidgetContext, WidgetDescriptor};
 // Free Text
 // =============================================================================
 
+pub const FREE_TEXT_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
+    name: "Free Text",
+    category: "Static",
+    default_size: (80, 28),
+};
+
 #[derive(Debug)]
 pub struct FreeText {
     text: String,
@@ -29,12 +35,7 @@ impl FreeText {
 
 impl LcdWidget for FreeText {
     fn descriptor(&self) -> &WidgetDescriptor {
-        const DESC: WidgetDescriptor = WidgetDescriptor {
-            name: "Free Text",
-            category: "Static",
-            default_size: (80, 28),
-        };
-        &DESC
+        &FREE_TEXT_DESCRIPTOR
     }
 
     fn render(&self, width: u32, height: u32, _ctx: &WidgetContext) -> RgbaImage {
@@ -81,10 +82,6 @@ impl LcdWidget for FreeText {
         self.font_name = name;
     }
 
-    fn type_id(&self) -> &'static str {
-        "free_text"
-    }
-
     fn save_config(&self) -> Value {
         json!({ "text": self.text, "color": self.color, "font": self.font_name })
     }
@@ -120,15 +117,17 @@ impl LcdWidget for FreeText {
     fn set_text_content(&mut self, text: String) {
         self.text = text;
     }
-
-    fn create_instance(&self) -> Box<dyn LcdWidget> {
-        Box::new(FreeText::new())
-    }
 }
 
 // =============================================================================
 // Horizontal Line
 // =============================================================================
+
+pub const HORIZONTAL_LINE_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
+    name: "Horizontal Line",
+    category: "Static",
+    default_size: (120, 3),
+};
 
 #[derive(Debug)]
 pub struct HorizontalLine {
@@ -145,12 +144,7 @@ impl HorizontalLine {
 
 impl LcdWidget for HorizontalLine {
     fn descriptor(&self) -> &WidgetDescriptor {
-        const DESC: WidgetDescriptor = WidgetDescriptor {
-            name: "Horizontal Line",
-            category: "Static",
-            default_size: (120, 3),
-        };
-        &DESC
+        &HORIZONTAL_LINE_DESCRIPTOR
     }
 
     fn render(&self, width: u32, height: u32, _ctx: &WidgetContext) -> RgbaImage {
@@ -178,10 +172,6 @@ impl LcdWidget for HorizontalLine {
         self.color = color;
     }
 
-    fn type_id(&self) -> &'static str {
-        "h_line"
-    }
-
     fn save_config(&self) -> Value {
         json!({ "color": self.color })
     }
@@ -198,15 +188,17 @@ impl LcdWidget for HorizontalLine {
             }
         }
     }
-
-    fn create_instance(&self) -> Box<dyn LcdWidget> {
-        Box::new(HorizontalLine::new())
-    }
 }
 
 // =============================================================================
 // Vertical Line
 // =============================================================================
+
+pub const VERTICAL_LINE_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
+    name: "Vertical Line",
+    category: "Static",
+    default_size: (3, 120),
+};
 
 #[derive(Debug)]
 pub struct VerticalLine {
@@ -223,12 +215,7 @@ impl VerticalLine {
 
 impl LcdWidget for VerticalLine {
     fn descriptor(&self) -> &WidgetDescriptor {
-        const DESC: WidgetDescriptor = WidgetDescriptor {
-            name: "Vertical Line",
-            category: "Static",
-            default_size: (3, 120),
-        };
-        &DESC
+        &VERTICAL_LINE_DESCRIPTOR
     }
 
     fn render(&self, width: u32, height: u32, _ctx: &WidgetContext) -> RgbaImage {
@@ -256,10 +243,6 @@ impl LcdWidget for VerticalLine {
         self.color = color;
     }
 
-    fn type_id(&self) -> &'static str {
-        "v_line"
-    }
-
     fn save_config(&self) -> Value {
         json!({ "color": self.color })
     }
@@ -276,15 +259,17 @@ impl LcdWidget for VerticalLine {
             }
         }
     }
-
-    fn create_instance(&self) -> Box<dyn LcdWidget> {
-        Box::new(VerticalLine::new())
-    }
 }
 
 // =============================================================================
 // Circle (Gauge Ring)
 // =============================================================================
+
+pub const CIRCLE_GAUGE_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
+    name: "Circle",
+    category: "Static",
+    default_size: (60, 60),
+};
 
 #[derive(Debug)]
 pub struct CircleGauge {
@@ -303,12 +288,7 @@ impl CircleGauge {
 
 impl LcdWidget for CircleGauge {
     fn descriptor(&self) -> &WidgetDescriptor {
-        const DESC: WidgetDescriptor = WidgetDescriptor {
-            name: "Circle",
-            category: "Static",
-            default_size: (60, 60),
-        };
-        &DESC
+        &CIRCLE_GAUGE_DESCRIPTOR
     }
 
     fn render(&self, width: u32, height: u32, _ctx: &WidgetContext) -> RgbaImage {
@@ -345,10 +325,6 @@ impl LcdWidget for CircleGauge {
         self.color = color;
     }
 
-    fn type_id(&self) -> &'static str {
-        "circle"
-    }
-
     fn save_config(&self) -> Value {
         json!({ "color": self.color, "thickness": self.thickness })
     }
@@ -368,15 +344,17 @@ impl LcdWidget for CircleGauge {
             self.thickness = t as u32;
         }
     }
-
-    fn create_instance(&self) -> Box<dyn LcdWidget> {
-        Box::new(CircleGauge::new())
-    }
 }
 
 // =============================================================================
 // Filled Circle (Dot)
 // =============================================================================
+
+pub const FILLED_CIRCLE_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
+    name: "Filled Circle",
+    category: "Static",
+    default_size: (40, 40),
+};
 
 #[derive(Debug)]
 pub struct FilledCircle {
@@ -393,12 +371,7 @@ impl FilledCircle {
 
 impl LcdWidget for FilledCircle {
     fn descriptor(&self) -> &WidgetDescriptor {
-        const DESC: WidgetDescriptor = WidgetDescriptor {
-            name: "Filled Circle",
-            category: "Static",
-            default_size: (40, 40),
-        };
-        &DESC
+        &FILLED_CIRCLE_DESCRIPTOR
     }
 
     fn render(&self, width: u32, height: u32, _ctx: &WidgetContext) -> RgbaImage {
@@ -427,10 +400,6 @@ impl LcdWidget for FilledCircle {
         self.color = color;
     }
 
-    fn type_id(&self) -> &'static str {
-        "filled_circle"
-    }
-
     fn save_config(&self) -> Value {
         json!({ "color": self.color })
     }
@@ -446,9 +415,5 @@ impl LcdWidget for FilledCircle {
                 ];
             }
         }
-    }
-
-    fn create_instance(&self) -> Box<dyn LcdWidget> {
-        Box::new(FilledCircle::new())
     }
 }

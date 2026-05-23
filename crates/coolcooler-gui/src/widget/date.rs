@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use super::fonts;
 use super::{LcdWidget, WidgetContext, WidgetDescriptor};
 
-const DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
+pub const DATE_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
     name: "Date",
     category: "Datetime",
     default_size: (130, 35),
@@ -32,7 +32,7 @@ impl DateWidget {
 
 impl LcdWidget for DateWidget {
     fn descriptor(&self) -> &WidgetDescriptor {
-        &DESCRIPTOR
+        &DATE_DESCRIPTOR
     }
 
     fn render(&self, width: u32, height: u32, _ctx: &WidgetContext) -> RgbaImage {
@@ -93,10 +93,6 @@ impl LcdWidget for DateWidget {
         self.font_name = name;
     }
 
-    fn type_id(&self) -> &'static str {
-        "date"
-    }
-
     fn save_config(&self) -> Value {
         json!({ "color": self.color, "font": self.font_name })
     }
@@ -115,9 +111,5 @@ impl LcdWidget for DateWidget {
         if let Some(f) = config.get("font").and_then(|v| v.as_str()) {
             self.font_name = f.to_string();
         }
-    }
-
-    fn create_instance(&self) -> Box<dyn LcdWidget> {
-        Box::new(DateWidget::new())
     }
 }

@@ -23,7 +23,7 @@ use iced::{
     Theme,
 };
 use image::{imageops, AnimationDecoder, DynamicImage, Rgba, RgbaImage};
-use widget::{sysinfo_backend::SysInfoBackend, LcdWidget, WidgetContext};
+use widget::{sysinfo_backend::SysInfoBackend, WidgetContext, WidgetSpec};
 
 // -- Colors --
 
@@ -166,7 +166,7 @@ struct CoolCooler {
     last_cursor: Option<Point>,
 
     // Widget catalog + backends
-    widget_catalog: Vec<Box<dyn LcdWidget>>,
+    widget_catalog: &'static [WidgetSpec],
     selected_category: String,
     sysinfo_backend: SysInfoBackend,
     widget_ctx: WidgetContext,
@@ -352,7 +352,7 @@ impl CoolCooler {
             .layers
             .iter()
             .map(|layer| preset::WidgetLayerData {
-                type_id: layer.widget.type_id().to_string(),
+                type_id: layer.type_id.to_string(),
                 position: layer.position,
                 size: layer.size,
                 opacity: layer.opacity,
@@ -384,11 +384,13 @@ impl CoolCooler {
 
         // Recreate widgets from config
         for wd in &data.widgets {
-            if let Some(mut w) = widget::create_by_type_id(&wd.type_id) {
+            if let Some(spec) = widget::spec_by_type_id(&wd.type_id) {
+                let mut w = spec.create();
                 w.load_config(&wd.config);
                 let id = widget::WidgetId(self.canvas.next_id());
                 self.canvas.layers.push(canvas::WidgetLayer {
                     id,
+                    type_id: spec.type_id,
                     widget: w,
                     position: wd.position,
                     size: wd.size,
@@ -769,9 +771,8 @@ impl CoolCooler {
                 if !widgets_allowed(self.driver_capability, self.is_animated()) {
                     return Task::none();
                 }
-                if let Some(template) = self.widget_catalog.get(catalog_idx) {
-                    let instance = template.create_instance();
-                    let id = self.canvas.add_widget(instance, self.lcd_size());
+                if let Some(spec) = self.widget_catalog.get(catalog_idx) {
+                    let id = self.canvas.add_widget(spec, self.lcd_size());
                     self.canvas.active_layer = LayerSelection::Widget(id);
                     self.rebuild_preview();
                 }
@@ -1325,7 +1326,7 @@ impl CoolCooler {
             .width(Length::FillPortion(3))
             .height(Length::Fill)
         } else {
-            let categories: Vec<String> = widget::categories(&self.widget_catalog)
+            let categories: Vec<String> = widget::categories(self.widget_catalog)
                 .into_iter()
                 .map(|s| s.to_string())
                 .collect();
@@ -1339,8 +1340,8 @@ impl CoolCooler {
             .text_size(13);
 
             let mut catalog_items = column![].spacing(6);
-            for (i, w) in self.widget_catalog.iter().enumerate() {
-                let desc = w.descriptor();
+            for (i, spec) in self.widget_catalog.iter().enumerate() {
+                let desc = spec.descriptor;
                 if desc.category != self.selected_category {
                     continue;
                 }

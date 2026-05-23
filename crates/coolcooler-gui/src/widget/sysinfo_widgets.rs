@@ -6,6 +6,36 @@ use serde_json::{json, Value};
 use super::fonts;
 use super::{LcdWidget, WidgetContext, WidgetDescriptor};
 
+pub const CPU_USAGE_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
+    name: "CPU Usage",
+    category: "System Metrics",
+    default_size: (50, 30),
+};
+
+pub const CPU_TEMP_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
+    name: "CPU Temp",
+    category: "System Metrics",
+    default_size: (50, 30),
+};
+
+pub const RAM_USAGE_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
+    name: "RAM Usage",
+    category: "System Metrics",
+    default_size: (80, 30),
+};
+
+pub const GPU_TEMP_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
+    name: "GPU Temp",
+    category: "System Metrics",
+    default_size: (50, 30),
+};
+
+pub const GPU_USAGE_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
+    name: "GPU Usage",
+    category: "System Metrics",
+    default_size: (50, 30),
+};
+
 fn render_text_widget(
     text: &str,
     width: u32,
@@ -33,9 +63,7 @@ fn render_text_widget(
 macro_rules! sysinfo_text_widget {
     (
         $name:ident,
-        type_id: $tid:expr,
-        desc_name: $desc_name:expr,
-        default_size: ($dw:expr, $dh:expr),
+        descriptor: $descriptor:ident,
         default_color: [$r:expr, $g:expr, $b:expr, $a:expr],
         initial_text: $initial:expr,
         tick: |$ctx:ident| $tick_body:expr
@@ -59,12 +87,7 @@ macro_rules! sysinfo_text_widget {
 
         impl LcdWidget for $name {
             fn descriptor(&self) -> &WidgetDescriptor {
-                const DESC: WidgetDescriptor = WidgetDescriptor {
-                    name: $desc_name,
-                    category: "System Metrics",
-                    default_size: ($dw, $dh),
-                };
-                &DESC
+                &$descriptor
             }
 
             fn render(&self, width: u32, height: u32, _ctx: &WidgetContext) -> RgbaImage {
@@ -109,10 +132,6 @@ macro_rules! sysinfo_text_widget {
                 self.font_name = name;
             }
 
-            fn type_id(&self) -> &'static str {
-                $tid
-            }
-
             fn save_config(&self) -> Value {
                 json!({ "color": self.color, "font": self.font_name })
             }
@@ -133,18 +152,13 @@ macro_rules! sysinfo_text_widget {
                 }
             }
 
-            fn create_instance(&self) -> Box<dyn LcdWidget> {
-                Box::new($name::new())
-            }
         }
     };
 }
 
 sysinfo_text_widget!(
     CpuUsage,
-    type_id: "cpu_usage",
-    desc_name: "CPU Usage",
-    default_size: (50, 30),
+    descriptor: CPU_USAGE_DESCRIPTOR,
     default_color: [80, 255, 80, 255],
     initial_text: "--",
     tick: |ctx| {
@@ -154,9 +168,7 @@ sysinfo_text_widget!(
 
 sysinfo_text_widget!(
     CpuTemp,
-    type_id: "cpu_temp",
-    desc_name: "CPU Temp",
-    default_size: (50, 30),
+    descriptor: CPU_TEMP_DESCRIPTOR,
     default_color: [255, 80, 60, 255],
     initial_text: "--",
     tick: |ctx| {
@@ -169,9 +181,7 @@ sysinfo_text_widget!(
 
 sysinfo_text_widget!(
     RamUsage,
-    type_id: "ram_usage",
-    desc_name: "RAM Usage",
-    default_size: (80, 30),
+    descriptor: RAM_USAGE_DESCRIPTOR,
     default_color: [255, 200, 50, 255],
     initial_text: "--/--",
     tick: |ctx| {
@@ -184,9 +194,7 @@ sysinfo_text_widget!(
 
 sysinfo_text_widget!(
     GpuTemp,
-    type_id: "gpu_temp",
-    desc_name: "GPU Temp",
-    default_size: (50, 30),
+    descriptor: GPU_TEMP_DESCRIPTOR,
     default_color: [0, 180, 255, 255],
     initial_text: "--",
     tick: |ctx| {
@@ -199,9 +207,7 @@ sysinfo_text_widget!(
 
 sysinfo_text_widget!(
     GpuUsage,
-    type_id: "gpu_usage",
-    desc_name: "GPU Usage",
-    default_size: (50, 30),
+    descriptor: GPU_USAGE_DESCRIPTOR,
     default_color: [0, 180, 255, 255],
     initial_text: "--",
     tick: |ctx| {

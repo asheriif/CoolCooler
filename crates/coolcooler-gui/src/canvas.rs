@@ -1,6 +1,6 @@
 use image::{imageops, RgbaImage};
 
-use crate::widget::{LcdWidget, WidgetContext, WidgetId};
+use crate::widget::{LcdWidget, WidgetContext, WidgetId, WidgetSpec};
 
 /// Viewport state for a single layer.
 #[derive(Debug, Clone)]
@@ -28,6 +28,7 @@ pub enum LayerSelection {
 /// A widget instance placed on the canvas.
 pub struct WidgetLayer {
     pub id: WidgetId,
+    pub type_id: &'static str,
     pub widget: Box<dyn LcdWidget>,
     pub position: (i32, i32),
     pub size: (u32, u32),
@@ -40,6 +41,7 @@ impl std::fmt::Debug for WidgetLayer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WidgetLayer")
             .field("id", &self.id)
+            .field("type_id", &self.type_id)
             .field("position", &self.position)
             .field("size", &self.size)
             .finish()
@@ -72,17 +74,18 @@ impl Canvas {
     }
 
     /// Add a widget instance to the canvas, centered by default.
-    pub fn add_widget(&mut self, widget: Box<dyn LcdWidget>, lcd_size: u32) -> WidgetId {
+    pub fn add_widget(&mut self, spec: &WidgetSpec, lcd_size: u32) -> WidgetId {
         let id = WidgetId(self.next_id);
         self.next_id += 1;
-        let size = widget.descriptor().default_size;
+        let size = spec.descriptor.default_size;
         let position = (
             (lcd_size as i32 - size.0 as i32) / 2,
             (lcd_size as i32 - size.1 as i32) / 2,
         );
         self.layers.push(WidgetLayer {
             id,
-            widget,
+            type_id: spec.type_id,
+            widget: spec.create(),
             position,
             size,
             visible: true,
