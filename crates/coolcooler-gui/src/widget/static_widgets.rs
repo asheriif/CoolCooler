@@ -1,8 +1,7 @@
-use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use image::{Rgba, RgbaImage};
-use imageproc::drawing::{draw_filled_circle_mut, draw_hollow_circle_mut, draw_text_mut};
+use imageproc::drawing::{draw_filled_circle_mut, draw_hollow_circle_mut};
 
-use super::fonts;
+use super::text::TextState;
 use super::{LcdWidget, WidgetCapabilities, WidgetContext, WidgetDescriptor, WidgetSettings};
 
 // =============================================================================
@@ -17,17 +16,13 @@ pub const FREE_TEXT_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
 
 #[derive(Debug)]
 pub struct FreeText {
-    text: String,
-    color: [u8; 4],
-    font_name: String,
+    text: TextState,
 }
 
 impl FreeText {
     pub fn new() -> Self {
         Self {
-            text: "Text".to_string(),
-            color: [255, 255, 255, 255],
-            font_name: fonts::DEFAULT_FONT.to_string(),
+            text: TextState::new("Text", [255, 255, 255, 255]),
         }
     }
 }
@@ -38,23 +33,7 @@ impl LcdWidget for FreeText {
     }
 
     fn render(&self, width: u32, height: u32, _ctx: &WidgetContext) -> RgbaImage {
-        let mut img = RgbaImage::from_pixel(width, height, Rgba([0, 0, 0, 0]));
-        let font_data = fonts::font_data(&self.font_name);
-        let font = FontRef::try_from_slice(font_data).unwrap();
-        let scale = PxScale::from(height as f32 * 0.7);
-        let color = Rgba(self.color);
-
-        let metrics = font.as_scaled(scale);
-        let text_width: f32 = self
-            .text
-            .chars()
-            .map(|c| metrics.h_advance(font.glyph_id(c)))
-            .sum();
-        let x = ((width as f32 - text_width) / 2.0).max(0.0) as i32;
-        let y = ((height as f32 - height as f32 * 0.7) / 2.0) as i32;
-
-        draw_text_mut(&mut img, color, x, y, scale, &font, &self.text);
-        img
+        self.text.render(width, height, 0.7)
     }
 
     fn capabilities(&self) -> WidgetCapabilities {
@@ -66,24 +45,11 @@ impl LcdWidget for FreeText {
     }
 
     fn settings(&self) -> WidgetSettings {
-        WidgetSettings {
-            text: Some(self.text.clone()),
-            color: Some(self.color),
-            font_name: Some(self.font_name.clone()),
-            thickness: None,
-        }
+        self.text.settings(true)
     }
 
     fn apply_settings(&mut self, settings: &WidgetSettings) {
-        if let Some(text) = settings.text.as_ref() {
-            self.text = text.clone();
-        }
-        if let Some(color) = settings.color {
-            self.color = color;
-        }
-        if let Some(font_name) = settings.font_name.as_ref() {
-            self.font_name = font_name.clone();
-        }
+        self.text.apply_settings(settings, true);
     }
 }
 

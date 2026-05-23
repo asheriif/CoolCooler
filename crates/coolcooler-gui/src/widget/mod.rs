@@ -4,6 +4,7 @@ pub mod fonts;
 pub mod static_widgets;
 pub mod sysinfo_backend;
 pub mod sysinfo_widgets;
+mod text;
 
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};

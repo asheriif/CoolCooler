@@ -1,8 +1,6 @@
-use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
-use image::{Rgba, RgbaImage};
-use imageproc::drawing::draw_text_mut;
+use image::RgbaImage;
 
-use super::fonts;
+use super::text::TextState;
 use super::{LcdWidget, WidgetCapabilities, WidgetContext, WidgetDescriptor, WidgetSettings};
 
 pub const CPU_USAGE_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
@@ -35,30 +33,6 @@ pub const GPU_USAGE_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
     default_size: (50, 30),
 };
 
-fn render_text_widget(
-    text: &str,
-    width: u32,
-    height: u32,
-    color: Rgba<u8>,
-    font_name: &str,
-) -> RgbaImage {
-    let mut img = RgbaImage::from_pixel(width, height, Rgba([0, 0, 0, 0]));
-    let font_data = fonts::font_data(font_name);
-    let font = FontRef::try_from_slice(font_data).unwrap();
-    let scale = PxScale::from(height as f32 * 0.65);
-
-    let metrics = font.as_scaled(scale);
-    let text_width: f32 = text
-        .chars()
-        .map(|c| metrics.h_advance(font.glyph_id(c)))
-        .sum();
-    let x = ((width as f32 - text_width) / 2.0).max(0.0) as i32;
-    let y = ((height as f32 - height as f32 * 0.65) / 2.0) as i32;
-
-    draw_text_mut(&mut img, color, x, y, scale, &font, text);
-    img
-}
-
 macro_rules! sysinfo_text_widget {
     (
         $name:ident,
@@ -69,17 +43,13 @@ macro_rules! sysinfo_text_widget {
     ) => {
         #[derive(Debug)]
         pub struct $name {
-            text: String,
-            color: [u8; 4],
-            font_name: String,
+            text: TextState,
         }
 
         impl $name {
             pub fn new() -> Self {
                 Self {
-                    text: $initial.to_string(),
-                    color: [$r, $g, $b, $a],
-                    font_name: fonts::DEFAULT_FONT.to_string(),
+                    text: TextState::new($initial, [$r, $g, $b, $a]),
                 }
             }
         }
@@ -90,7 +60,7 @@ macro_rules! sysinfo_text_widget {
             }
 
             fn render(&self, width: u32, height: u32, _ctx: &WidgetContext) -> RgbaImage {
-                render_text_widget(&self.text, width, height, Rgba(self.color), &self.font_name)
+                self.text.render(width, height, 0.65)
             }
 
             fn is_dynamic(&self) -> bool {
@@ -99,12 +69,7 @@ macro_rules! sysinfo_text_widget {
 
             fn tick(&mut self, $ctx: &WidgetContext) -> bool {
                 let new_text: String = $tick_body;
-                if new_text != self.text {
-                    self.text = new_text;
-                    true
-                } else {
-                    false
-                }
+                self.text.set_text(new_text)
             }
 
             fn capabilities(&self) -> WidgetCapabilities {
@@ -116,20 +81,11 @@ macro_rules! sysinfo_text_widget {
             }
 
             fn settings(&self) -> WidgetSettings {
-                WidgetSettings {
-                    color: Some(self.color),
-                    font_name: Some(self.font_name.clone()),
-                    ..Default::default()
-                }
+                self.text.settings(false)
             }
 
             fn apply_settings(&mut self, settings: &WidgetSettings) {
-                if let Some(color) = settings.color {
-                    self.color = color;
-                }
-                if let Some(font_name) = settings.font_name.as_ref() {
-                    self.font_name = font_name.clone();
-                }
+                self.text.apply_settings(settings, false);
             }
         }
     };
