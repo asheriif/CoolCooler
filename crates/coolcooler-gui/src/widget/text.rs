@@ -47,16 +47,23 @@ impl TextState {
         })
     }
 
-    pub(super) fn apply_config(&mut self, config: &WidgetConfig, allow_text: bool) {
-        if let WidgetConfig::Text(config) = config {
-            if allow_text {
-                if let Some(text) = config.text.as_ref() {
-                    self.text = text.clone();
-                }
+    pub(super) fn apply_config(
+        &mut self,
+        config: &WidgetConfig,
+        allow_text: bool,
+    ) -> Result<(), &'static str> {
+        let WidgetConfig::Text(config) = config else {
+            return Err("expected text widget config");
+        };
+
+        if allow_text {
+            if let Some(text) = config.text.as_ref() {
+                self.text = text.clone();
             }
-            self.color = config.color;
-            self.font_name = config.font_name.clone();
         }
+        self.color = config.color;
+        self.font_name = config.font_name.clone();
+        Ok(())
     }
 
     pub(super) fn apply_edit(&mut self, edit: WidgetEdit, allow_text: bool) {

@@ -48,8 +48,8 @@ impl LcdWidget for DateWidget {
         self.text.config(false)
     }
 
-    fn apply_config(&mut self, config: &WidgetConfig) {
-        self.text.apply_config(config, false);
+    fn apply_config(&mut self, config: &WidgetConfig) -> Result<(), &'static str> {
+        self.text.apply_config(config, false)
     }
 
     fn apply_edit(&mut self, edit: WidgetEdit) {

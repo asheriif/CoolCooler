@@ -126,7 +126,12 @@ pub trait LcdWidget: fmt::Debug + Send {
         WidgetConfig::None
     }
 
-    fn apply_config(&mut self, _config: &WidgetConfig) {}
+    fn apply_config(&mut self, config: &WidgetConfig) -> Result<(), &'static str> {
+        match config {
+            WidgetConfig::None => Ok(()),
+            _ => Err("widget does not accept this config"),
+        }
+    }
 
     fn apply_edit(&mut self, _edit: WidgetEdit) {}
 }
@@ -320,5 +325,17 @@ mod tests {
         }))
         .unwrap();
         assert!(matches!(circle, WidgetConfig::Circle(_)));
+    }
+
+    #[test]
+    fn widget_rejects_mismatched_config_shape() {
+        let mut line = static_widgets::HorizontalLine::new();
+        let config = WidgetConfig::Text(TextWidgetConfig {
+            text: Some("wrong".to_string()),
+            color: [255, 255, 255, 255],
+            font_name: "default".to_string(),
+        });
+
+        assert!(line.apply_config(&config).is_err());
     }
 }

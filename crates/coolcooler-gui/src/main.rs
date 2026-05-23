@@ -312,7 +312,7 @@ impl CoolCooler {
     }
 
     /// Apply a loaded preset's widget/viewport config to the current state.
-    fn apply_preset_config(&mut self, data: &preset::PresetData) {
+    fn apply_preset_config(&mut self, data: &preset::PresetData) -> usize {
         // Restore base viewport
         self.canvas.base_viewport.zoom = data.viewport.zoom;
         self.canvas.base_viewport.pan = data.viewport.pan;
@@ -322,24 +322,31 @@ impl CoolCooler {
         self.canvas.active_layer = canvas::LayerSelection::Base;
 
         // Recreate widgets from config
+        let mut skipped_widgets = 0;
         for wd in &data.widgets {
-            if let Some(spec) = widget::spec_by_type_id(&wd.type_id) {
-                let mut w = spec.create();
-                w.apply_config(&wd.config);
-                let id = widget::WidgetId(self.canvas.next_id());
-                self.canvas.layers.push(canvas::WidgetLayer {
-                    id,
-                    type_id: spec.type_id,
-                    widget: w,
-                    position: wd.position,
-                    size: wd.size,
-                    visible: true,
-                    opacity: wd.opacity,
-                });
+            let Some(spec) = widget::spec_by_type_id(&wd.type_id) else {
+                skipped_widgets += 1;
+                continue;
+            };
+            let mut w = spec.create();
+            if w.apply_config(&wd.config).is_err() {
+                skipped_widgets += 1;
+                continue;
             }
+            let id = widget::WidgetId(self.canvas.next_id());
+            self.canvas.layers.push(canvas::WidgetLayer {
+                id,
+                type_id: spec.type_id,
+                widget: w,
+                position: wd.position,
+                size: wd.size,
+                visible: true,
+                opacity: wd.opacity,
+            });
         }
 
         self.rebuild_preview();
+        skipped_widgets
     }
 
     fn load_preset_folder(&mut self, folder: String, silent: bool) -> Task<Message> {
@@ -421,12 +428,16 @@ impl CoolCooler {
         self.current_preset_name = Some(name.clone());
         self.current_frame = 0;
         self.last_advance = Instant::now();
-        self.apply_preset_config(&data);
+        let skipped_widgets = self.apply_preset_config(&data);
         self.start_display();
         preset::remember_last_used(&folder);
 
         if !silent || self.status_message.is_empty() {
-            self.status_message = format!("Loaded preset '{name}'");
+            self.status_message = if skipped_widgets == 0 {
+                format!("Loaded preset '{name}'")
+            } else {
+                format!("Loaded preset '{name}' ({skipped_widgets} incompatible widget(s) skipped)")
+            };
         }
     }
 
