@@ -16,12 +16,9 @@ use std::time::{Duration, Instant};
 
 use canvas::{Canvas, LayerSelection, Viewport};
 use composition::{CanvasPolicy, SourceKind};
-use coolcooler_core::frame::{self, DEFAULT_JPEG_QUALITY};
-use coolcooler_core::DeviceInfo;
-use coolcooler_driver::DisplayCapability;
 use display_session::DisplayController;
 use iced::{mouse, window, Color, Element, Point, Subscription, Task, Theme};
-use image::{DynamicImage, Rgba, RgbaImage};
+use image::{Rgba, RgbaImage};
 use rendering::{circular_preview_from_rgba, render_base_rgba};
 use source::{load_source_data, LoadedData, SourceFrame};
 use style::{AppColors, DARK, LIGHT};
@@ -56,9 +53,6 @@ fn main() -> iced::Result {
 
 struct CoolCooler {
     dark_mode: bool,
-    driver_info: DeviceInfo,
-    driver_capability: DisplayCapability,
-    driver_connected: bool,
     selected_path: Option<PathBuf>,
 
     // Source data
@@ -150,27 +144,12 @@ enum Message {
 
 impl CoolCooler {
     fn boot() -> (Self, Task<Message>) {
-        let (connected, info, capability) = match coolcooler_driver::detect_device() {
-            Some(driver) => {
-                let info = driver.info().clone();
-                let cap = driver.capability();
-                (true, info, cap)
-            }
-            None => {
-                // No device found — show UI in disconnected state with default info
-                let info = DeviceInfo::default();
-                (false, info, DisplayCapability::Streaming)
-            }
-        };
         let (tray_handle, tray_rx) = tray::spawn();
 
         let (id, open_task) = window::open(app_window_settings());
 
         let mut app = Self {
             dark_mode: true,
-            driver_info: info,
-            driver_capability: capability,
-            driver_connected: connected,
             selected_path: None,
             source_frames: Vec::new(),
             filename: String::new(),
@@ -221,7 +200,7 @@ impl CoolCooler {
     }
 
     fn canvas_policy(&self) -> CanvasPolicy {
-        CanvasPolicy::for_content(self.driver_capability, self.source_kind())
+        CanvasPolicy::for_content(self.display.capability(), self.source_kind())
     }
 
     fn colors(&self) -> &'static AppColors {
@@ -233,7 +212,7 @@ impl CoolCooler {
     }
 
     fn lcd_size(&self) -> u32 {
-        self.driver_info.resolution.width
+        self.display.info().resolution.width
     }
 
     /// Render the full composited 240x240 RGBA (base + widgets).
@@ -241,7 +220,7 @@ impl CoolCooler {
         let lcd = self.lcd_size();
         let base = if let Some(src) = self.source_frames.get(self.current_frame) {
             let vp = &self.canvas.base_viewport;
-            render_base_rgba(&src.rgba, &self.driver_info, vp.zoom, vp.pan)
+            render_base_rgba(&src.rgba, self.display.info(), vp.zoom, vp.pan)
         } else {
             RgbaImage::from_pixel(lcd, lcd, Rgba([0, 0, 0, 255]))
         };
@@ -255,9 +234,7 @@ impl CoolCooler {
 
     fn commit_frame(&mut self) {
         let composited = self.render_composited();
-        if let Some(bytes) = self.encode_device_frame(&composited) {
-            self.display.submit_frame(bytes);
-        }
+        self.display.submit_frame(&composited);
         self.preview = Some(circular_preview_from_rgba(composited));
     }
 
@@ -437,11 +414,8 @@ impl CoolCooler {
 
     /// Start (or restart) the device display thread.
     fn start_display(&mut self) {
-        let initial_frame = self
-            .driver_connected
-            .then(|| self.encode_current_device_frame())
-            .flatten();
-        self.display.restart(initial_frame);
+        let composited = self.render_composited();
+        self.display.restart(&composited);
     }
 
     fn stop_display(&mut self) {
@@ -450,28 +424,6 @@ impl CoolCooler {
 
     fn reap_stopped_display(&mut self) {
         self.display.join_finished();
-    }
-
-    fn encode_current_device_frame(&self) -> Option<Vec<u8>> {
-        let composited = self.render_composited();
-        self.encode_device_frame(&composited)
-    }
-
-    fn encode_device_frame(&self, composited: &RgbaImage) -> Option<Vec<u8>> {
-        match self.driver_capability {
-            DisplayCapability::Streaming => {
-                let rgb = DynamicImage::ImageRgba8(composited.clone()).to_rgb8();
-                frame::encode_resized(&rgb, self.driver_info.rotation, DEFAULT_JPEG_QUALITY).ok()
-            }
-            DisplayCapability::FileTransfer => {
-                // PNG encode — liquidctl handles resizing/format conversion
-                let mut buf = std::io::Cursor::new(Vec::new());
-                DynamicImage::ImageRgba8(composited.clone())
-                    .write_to(&mut buf, image::ImageFormat::Png)
-                    .ok()
-                    .map(|()| buf.into_inner())
-            }
-        }
     }
 
     fn clamp_base_pan(&mut self) {
@@ -537,7 +489,7 @@ impl CoolCooler {
 
                         // On file-transfer devices, clear widgets when loading a GIF
                         let policy = CanvasPolicy::for_content(
-                            self.driver_capability,
+                            self.display.capability(),
                             SourceKind::from_frame_count(count),
                         );
                         if !policy.widgets_allowed() && !self.canvas.layers.is_empty() {

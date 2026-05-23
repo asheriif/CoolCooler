@@ -2,10 +2,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use coolcooler_driver::DisplayDriver;
+use coolcooler_core::frame::{self, DEFAULT_JPEG_QUALITY};
+use coolcooler_core::DeviceInfo;
+use coolcooler_driver::{DisplayCapability, DisplayDriver};
+use image::{DynamicImage, RgbaImage};
 
 pub(crate) struct DisplayController {
     state: DisplayState,
+    status: DisplayStatus,
 }
 
 enum DisplayState {
@@ -13,31 +17,84 @@ enum DisplayState {
     Running(DisplaySession),
     Stopping {
         session: DisplaySession,
-        pending_restart: Option<Vec<u8>>,
+        pending_restart: Option<PendingStart>,
     },
+}
+
+struct PendingStart {
+    driver: DisplayDriver,
+    frame: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DisplayStatus {
+    connected: bool,
+    info: DeviceInfo,
+    capability: DisplayCapability,
+}
+
+impl DisplayStatus {
+    fn disconnected() -> Self {
+        Self {
+            connected: false,
+            info: DeviceInfo::default(),
+            capability: DisplayCapability::Streaming,
+        }
+    }
+
+    fn from_driver(driver: &DisplayDriver) -> Self {
+        Self {
+            connected: true,
+            info: driver.info().clone(),
+            capability: driver.capability(),
+        }
+    }
 }
 
 impl DisplayController {
     pub(crate) fn new() -> Self {
-        Self {
+        let mut controller = Self {
             state: DisplayState::Idle,
-        }
+            status: DisplayStatus::disconnected(),
+        };
+        controller.refresh_status();
+        controller
     }
 
-    pub(crate) fn restart(&mut self, initial_frame: Option<Vec<u8>>) {
+    pub(crate) fn info(&self) -> &DeviceInfo {
+        &self.status.info
+    }
+
+    pub(crate) fn capability(&self) -> DisplayCapability {
+        self.status.capability
+    }
+
+    pub(crate) fn is_connected(&self) -> bool {
+        self.status.connected
+    }
+
+    pub(crate) fn restart(&mut self, composited: &RgbaImage) {
+        let Some(pending_start) = self.detect_pending_start(composited) else {
+            self.stop();
+            return;
+        };
+        self.restart_pending(pending_start);
+    }
+
+    fn restart_pending(&mut self, pending_start: PendingStart) {
         match std::mem::replace(&mut self.state, DisplayState::Idle) {
-            DisplayState::Idle => self.start(initial_frame),
+            DisplayState::Idle => self.start(pending_start),
             DisplayState::Running(session) => {
                 session.request_stop();
                 self.state = DisplayState::Stopping {
                     session,
-                    pending_restart: initial_frame,
+                    pending_restart: Some(pending_start),
                 };
             }
             DisplayState::Stopping { session, .. } => {
                 self.state = DisplayState::Stopping {
                     session,
-                    pending_restart: initial_frame,
+                    pending_restart: Some(pending_start),
                 };
             }
         }
@@ -64,9 +121,12 @@ impl DisplayController {
         }
     }
 
-    pub(crate) fn submit_frame(&self, bytes: Vec<u8>) {
+    pub(crate) fn submit_frame(&self, composited: &RgbaImage) {
         if let DisplayState::Running(session) = &self.state {
-            session.submit_frame(bytes);
+            if let Some(bytes) = encode_frame(composited, &self.status.info, self.status.capability)
+            {
+                session.submit_frame(bytes);
+            }
         }
     }
 
@@ -77,7 +137,11 @@ impl DisplayController {
                 pending_restart,
             } => {
                 if session.join_if_finished() {
-                    self.start(pending_restart);
+                    if let Some(pending_start) = pending_restart {
+                        self.start(pending_start);
+                    } else {
+                        self.state = DisplayState::Idle;
+                    }
                 } else {
                     self.state = DisplayState::Stopping {
                         session,
@@ -95,13 +159,47 @@ impl DisplayController {
         matches!(self.state, DisplayState::Stopping { .. })
     }
 
-    fn start(&mut self, initial_frame: Option<Vec<u8>>) {
-        if let Some((driver, frame)) = initial_frame
-            .and_then(|frame| coolcooler_driver::detect_device().map(|driver| (driver, frame)))
-        {
-            self.state = DisplayState::Running(DisplaySession::start(driver, frame));
-        } else {
-            self.state = DisplayState::Idle;
+    fn start(&mut self, pending_start: PendingStart) {
+        self.state = DisplayState::Running(DisplaySession::start(
+            pending_start.driver,
+            pending_start.frame,
+        ));
+    }
+
+    fn refresh_status(&mut self) {
+        self.status = coolcooler_driver::detect_device()
+            .as_ref()
+            .map(DisplayStatus::from_driver)
+            .unwrap_or_else(DisplayStatus::disconnected);
+    }
+
+    fn detect_pending_start(&mut self, composited: &RgbaImage) -> Option<PendingStart> {
+        let Some(driver) = coolcooler_driver::detect_device() else {
+            self.status = DisplayStatus::disconnected();
+            return None;
+        };
+        self.status = DisplayStatus::from_driver(&driver);
+        let frame = encode_frame(composited, &self.status.info, self.status.capability)?;
+        Some(PendingStart { driver, frame })
+    }
+}
+
+fn encode_frame(
+    composited: &RgbaImage,
+    info: &DeviceInfo,
+    capability: DisplayCapability,
+) -> Option<Vec<u8>> {
+    match capability {
+        DisplayCapability::Streaming => {
+            let rgb = DynamicImage::ImageRgba8(composited.clone()).to_rgb8();
+            frame::encode_resized(&rgb, info.rotation, DEFAULT_JPEG_QUALITY).ok()
+        }
+        DisplayCapability::FileTransfer => {
+            let mut buf = std::io::Cursor::new(Vec::new());
+            DynamicImage::ImageRgba8(composited.clone())
+                .write_to(&mut buf, image::ImageFormat::Png)
+                .ok()
+                .map(|()| buf.into_inner())
         }
     }
 }
