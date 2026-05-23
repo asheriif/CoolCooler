@@ -35,23 +35,25 @@ impl DisplaySession {
 
     pub(crate) fn stop(mut self) {
         self.request_stop();
-        if let Some(join) = self.join.take() {
-            let _ = join.join();
-        }
+        self.join_in_background();
     }
 
     fn request_stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
+    }
+
+    fn join_in_background(&mut self) {
+        if let Some(join) = self.join.take() {
+            let _ = thread::spawn(move || {
+                let _ = join.join();
+            });
+        }
     }
 }
 
 impl Drop for DisplaySession {
     fn drop(&mut self) {
         self.request_stop();
-        if self.join.as_ref().is_some_and(|join| join.is_finished()) {
-            if let Some(join) = self.join.take() {
-                let _ = join.join();
-            }
-        }
+        self.join_in_background();
     }
 }
