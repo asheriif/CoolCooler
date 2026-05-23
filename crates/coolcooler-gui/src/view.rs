@@ -1,4 +1,3 @@
-use coolcooler_driver::widgets_allowed;
 use iced::widget::{
     button, column, container, mouse_area, pick_list, row, scrollable, slider, text, text_input,
 };
@@ -343,13 +342,12 @@ pub(crate) fn view(app: &CoolCooler, _window_id: window::Id) -> Element<'_, Mess
         .push(preset_buttons)
         .push(quit_btn);
 
-    let right_panel = if !widgets_allowed(app.driver_capability, app.is_animated()) {
+    let policy = app.canvas_policy();
+    let right_panel = if let Some(message) = policy.widget_block_message() {
         card(
             column![
                 text("Widgets").size(18).color(c.text_primary),
-                text("Widgets with animated backgrounds are not supported on this device.")
-                    .size(13)
-                    .color(c.text_dim),
+                text(message).size(13).color(c.text_dim),
             ]
             .spacing(12),
             c,

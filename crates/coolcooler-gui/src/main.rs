@@ -1,4 +1,5 @@
 mod canvas;
+mod composition;
 mod display_session;
 mod preset;
 mod rendering;
@@ -14,9 +15,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use canvas::{Canvas, LayerSelection, Viewport};
+use composition::{CanvasPolicy, SourceKind};
 use coolcooler_core::frame::{self, DEFAULT_JPEG_QUALITY};
 use coolcooler_core::DeviceInfo;
-use coolcooler_driver::{widgets_allowed, DisplayCapability};
+use coolcooler_driver::DisplayCapability;
 use display_session::DisplaySession;
 use iced::{mouse, window, Color, Element, Point, Subscription, Task, Theme};
 use image::{DynamicImage, Rgba, RgbaImage};
@@ -210,6 +212,14 @@ impl CoolCooler {
 
     fn is_animated(&self) -> bool {
         self.source_frames.len() > 1
+    }
+
+    fn source_kind(&self) -> SourceKind {
+        SourceKind::from_frame_count(self.source_frames.len())
+    }
+
+    fn canvas_policy(&self) -> CanvasPolicy {
+        CanvasPolicy::for_content(self.driver_capability, self.source_kind())
     }
 
     fn colors(&self) -> &'static AppColors {
@@ -507,9 +517,11 @@ impl CoolCooler {
                             .collect();
 
                         // On file-transfer devices, clear widgets when loading a GIF
-                        if !widgets_allowed(self.driver_capability, count > 1)
-                            && !self.canvas.layers.is_empty()
-                        {
+                        let policy = CanvasPolicy::for_content(
+                            self.driver_capability,
+                            SourceKind::from_frame_count(count),
+                        );
+                        if !policy.widgets_allowed() && !self.canvas.layers.is_empty() {
                             self.canvas.layers.clear();
                             self.canvas.active_layer = LayerSelection::Base;
                         }
@@ -671,7 +683,7 @@ impl CoolCooler {
             }
             Message::AddWidget(catalog_idx) => {
                 // Block adding widgets when GIF is loaded on a file-transfer device
-                if !widgets_allowed(self.driver_capability, self.is_animated()) {
+                if !self.canvas_policy().widgets_allowed() {
                     return Task::none();
                 }
                 if let Some(spec) = self.widget_catalog.get(catalog_idx) {
