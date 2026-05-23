@@ -280,9 +280,10 @@ fn unique_suffix() -> String {
     format!("{}.{}", std::process::id(), nanos)
 }
 
-/// Best-effort cleanup for save staging folders left by an interrupted app run.
+/// Best-effort recovery for save staging folders left by an interrupted app run.
 pub fn cleanup_stale_internal_dirs() {
-    let Ok(entries) = fs::read_dir(presets_dir()) else {
+    let dir = presets_dir();
+    let Ok(entries) = fs::read_dir(&dir) else {
         return;
     };
 
@@ -291,11 +292,23 @@ pub fn cleanup_stale_internal_dirs() {
         if !path.is_dir() {
             continue;
         }
-        if path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(is_internal_folder)
-        {
+
+        let Some(folder) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some(live_folder) = live_folder_for_internal(folder) else {
+            continue;
+        };
+
+        let live_dir = dir.join(live_folder);
+        if is_valid_preset_dir(&live_dir) {
+            let _ = fs::remove_dir_all(path);
+            continue;
+        }
+
+        if is_valid_preset_dir(&path) {
+            let _ = fs::rename(&path, &live_dir);
+        } else {
             let _ = fs::remove_dir_all(path);
         }
     }
@@ -307,6 +320,19 @@ fn is_hidden_or_internal_folder(folder: &str) -> bool {
 
 fn is_internal_folder(folder: &str) -> bool {
     folder.starts_with('.') && (folder.contains(STAGING_MARKER) || folder.contains(BACKUP_MARKER))
+}
+
+fn live_folder_for_internal(folder: &str) -> Option<&str> {
+    let folder = folder.strip_prefix('.')?;
+    folder
+        .split_once(STAGING_MARKER)
+        .or_else(|| folder.split_once(BACKUP_MARKER))
+        .map(|(live_folder, _)| live_folder)
+        .filter(|live_folder| !live_folder.is_empty())
+}
+
+fn is_valid_preset_dir(path: &Path) -> bool {
+    path.join("preset.json").is_file()
 }
 
 /// List all saved presets.
@@ -394,5 +420,12 @@ mod tests {
         assert!(is_hidden_or_internal_folder(".demo.backup.123"));
         assert!(is_hidden_or_internal_folder(".hidden"));
         assert!(!is_hidden_or_internal_folder("demo"));
+    }
+
+    #[test]
+    fn internal_folder_names_map_back_to_live_folder() {
+        assert_eq!(live_folder_for_internal(".demo.staging.123"), Some("demo"));
+        assert_eq!(live_folder_for_internal(".demo.backup.123"), Some("demo"));
+        assert_eq!(live_folder_for_internal("demo"), None);
     }
 }
