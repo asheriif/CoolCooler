@@ -249,9 +249,17 @@ impl CoolCooler {
     fn rebuild_preview(&mut self) {
         let composited = self.render_composited();
         self.preview = Some(circular_preview_from_rgba(composited));
-        if self.display_session.is_some() {
-            self.push_device_frame();
+    }
+
+    fn commit_frame(&mut self) {
+        let composited = self.render_composited();
+        if let (Some(session), Some(bytes)) = (
+            self.display_session.as_ref(),
+            self.encode_device_frame(&composited),
+        ) {
+            session.submit_frame(bytes);
         }
+        self.preview = Some(circular_preview_from_rgba(composited));
     }
 
     /// Build a PresetData from the current app state.
@@ -416,7 +424,7 @@ impl CoolCooler {
 
         if let (Some(driver), Some(frame)) = (
             coolcooler_driver::detect_device(),
-            self.encode_device_frame(),
+            self.encode_current_device_frame(),
         ) {
             self.display_session = Some(DisplaySession::start(driver, frame));
         }
@@ -428,30 +436,25 @@ impl CoolCooler {
         }
     }
 
-    fn encode_device_frame(&self) -> Option<Vec<u8>> {
+    fn encode_current_device_frame(&self) -> Option<Vec<u8>> {
         let composited = self.render_composited();
+        self.encode_device_frame(&composited)
+    }
+
+    fn encode_device_frame(&self, composited: &RgbaImage) -> Option<Vec<u8>> {
         match self.driver_capability {
             DisplayCapability::Streaming => {
-                let rgb = DynamicImage::ImageRgba8(composited).to_rgb8();
+                let rgb = DynamicImage::ImageRgba8(composited.clone()).to_rgb8();
                 frame::encode_resized(&rgb, self.driver_info.rotation, DEFAULT_JPEG_QUALITY).ok()
             }
             DisplayCapability::FileTransfer => {
                 // PNG encode — liquidctl handles resizing/format conversion
                 let mut buf = std::io::Cursor::new(Vec::new());
-                DynamicImage::ImageRgba8(composited)
+                DynamicImage::ImageRgba8(composited.clone())
                     .write_to(&mut buf, image::ImageFormat::Png)
                     .ok()
                     .map(|()| buf.into_inner())
             }
-        }
-    }
-
-    /// Encode the current composited frame and push to the device thread.
-    fn push_device_frame(&self) {
-        if let (Some(session), Some(bytes)) =
-            (self.display_session.as_ref(), self.encode_device_frame())
-        {
-            session.submit_frame(bytes);
         }
     }
 
@@ -548,10 +551,7 @@ impl CoolCooler {
                     if self.last_advance.elapsed() >= dur {
                         self.current_frame = (self.current_frame + 1) % self.source_frames.len();
                         self.last_advance = Instant::now();
-                        self.rebuild_preview();
-                        if self.display_session.is_some() {
-                            self.push_device_frame();
-                        }
+                        self.commit_frame();
                     }
                 }
             }
@@ -568,10 +568,7 @@ impl CoolCooler {
                 }
 
                 if self.canvas.tick_widgets(&self.widget_ctx) {
-                    self.rebuild_preview();
-                    if self.display_session.is_some() {
-                        self.push_device_frame();
-                    }
+                    self.commit_frame();
                 }
             }
             Message::Scroll(delta) => {
@@ -587,7 +584,7 @@ impl CoolCooler {
                             let vp = &mut self.canvas.base_viewport;
                             vp.zoom = (vp.zoom * factor).clamp(0.25, 10.0);
                             self.clamp_base_pan();
-                            self.rebuild_preview();
+                            self.commit_frame();
                         }
                     }
                     LayerSelection::Widget(id) => {
@@ -596,7 +593,7 @@ impl CoolCooler {
                             let new_w = ((layer.size.0 as f32) * factor).round() as u32;
                             let new_h = ((layer.size.1 as f32) * factor).round() as u32;
                             layer.size = (new_w.clamp(10, 240), new_h.clamp(10, 240));
-                            self.rebuild_preview();
+                            self.commit_frame();
                         }
                     }
                 }
@@ -623,7 +620,7 @@ impl CoolCooler {
                                     vp.pan.0 -= dx * src_per_px;
                                     vp.pan.1 -= dy * src_per_px;
                                     self.clamp_base_pan();
-                                    self.rebuild_preview();
+                                    self.commit_frame();
                                 }
                             }
                             LayerSelection::Widget(id) => {
@@ -644,7 +641,7 @@ impl CoolCooler {
                                         .1
                                         .clamp(-(size.1 as i32) + min_vis, lcd_i - min_vis);
                                     layer.position = new_pos;
-                                    self.rebuild_preview();
+                                    self.commit_frame();
                                 }
                             }
                         }
@@ -673,7 +670,7 @@ impl CoolCooler {
                         }
                     }
                 }
-                self.rebuild_preview();
+                self.commit_frame();
             }
             Message::SelectLayer(option) => {
                 self.canvas.active_layer = option.selection;
@@ -689,18 +686,18 @@ impl CoolCooler {
                 if let Some(spec) = self.widget_catalog.get(catalog_idx) {
                     let id = self.canvas.add_widget(spec, self.lcd_size());
                     self.canvas.active_layer = LayerSelection::Widget(id);
-                    self.rebuild_preview();
+                    self.commit_frame();
                 }
             }
             Message::RemoveWidget(id) => {
                 self.canvas.remove_widget(id);
-                self.rebuild_preview();
+                self.commit_frame();
             }
             Message::SetWidgetOpacity(val) => {
                 if let LayerSelection::Widget(id) = self.canvas.active_layer {
                     if let Some(layer) = self.canvas.layers.iter_mut().find(|l| l.id == id) {
                         layer.opacity = (val * 255.0) as u8;
-                        self.rebuild_preview();
+                        self.commit_frame();
                     }
                 }
             }
@@ -710,7 +707,7 @@ impl CoolCooler {
                         let mut settings = layer.widget.settings();
                         settings.color = Some(color);
                         layer.widget.apply_settings(&settings);
-                        self.rebuild_preview();
+                        self.commit_frame();
                     }
                 }
             }
@@ -720,7 +717,7 @@ impl CoolCooler {
                         let mut settings = layer.widget.settings();
                         settings.font_name = Some(name);
                         layer.widget.apply_settings(&settings);
-                        self.rebuild_preview();
+                        self.commit_frame();
                     }
                 }
             }
@@ -730,7 +727,7 @@ impl CoolCooler {
                         let mut settings = layer.widget.settings();
                         settings.text = Some(text);
                         layer.widget.apply_settings(&settings);
-                        self.rebuild_preview();
+                        self.commit_frame();
                     }
                 }
             }
