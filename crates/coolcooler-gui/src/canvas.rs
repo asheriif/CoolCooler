@@ -1,6 +1,6 @@
 use image::{imageops, RgbaImage};
 
-use crate::widget::{LcdWidget, WidgetContext, WidgetId, WidgetSpec};
+use crate::widget::{LcdWidget, WidgetContext, WidgetEdit, WidgetId, WidgetSpec};
 
 /// Viewport state for a single layer.
 #[derive(Debug, Clone)]
@@ -19,7 +19,7 @@ impl Default for Viewport {
 }
 
 /// Which layer the user is currently controlling.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayerSelection {
     Base,
     Widget(WidgetId),
@@ -50,9 +50,9 @@ impl std::fmt::Debug for WidgetLayer {
 
 /// The canvas model: base layer + ordered widget layers.
 pub struct Canvas {
-    pub base_viewport: Viewport,
-    pub layers: Vec<WidgetLayer>,
-    pub active_layer: LayerSelection,
+    base_viewport: Viewport,
+    layers: Vec<WidgetLayer>,
+    active_layer: LayerSelection,
     next_id: usize,
 }
 
@@ -66,8 +66,57 @@ impl Canvas {
         }
     }
 
+    pub fn base_viewport(&self) -> &Viewport {
+        &self.base_viewport
+    }
+
+    pub fn set_base_viewport(&mut self, viewport: Viewport) {
+        self.base_viewport = viewport;
+    }
+
+    pub fn layers(&self) -> &[WidgetLayer] {
+        &self.layers
+    }
+
+    pub fn has_widgets(&self) -> bool {
+        !self.layers.is_empty()
+    }
+
+    pub fn has_widgets_in_category(&self, category: &str) -> bool {
+        self.layers
+            .iter()
+            .any(|layer| layer.widget.descriptor().category == category)
+    }
+
+    pub fn active_layer(&self) -> LayerSelection {
+        self.active_layer
+    }
+
+    pub fn select_layer(&mut self, selection: LayerSelection) {
+        self.active_layer = selection;
+    }
+
+    pub fn active_widget_layer(&self) -> Option<&WidgetLayer> {
+        let LayerSelection::Widget(id) = self.active_layer else {
+            return None;
+        };
+        self.layers.iter().find(|layer| layer.id == id)
+    }
+
+    fn active_widget_layer_mut(&mut self) -> Option<&mut WidgetLayer> {
+        let LayerSelection::Widget(id) = self.active_layer else {
+            return None;
+        };
+        self.layers.iter_mut().find(|layer| layer.id == id)
+    }
+
+    pub fn clear_widgets(&mut self) {
+        self.layers.clear();
+        self.active_layer = LayerSelection::Base;
+    }
+
     /// Get the next unique widget ID and advance the counter.
-    pub fn next_id(&mut self) -> usize {
+    fn next_id(&mut self) -> usize {
         let id = self.next_id;
         self.next_id += 1;
         id
@@ -94,10 +143,162 @@ impl Canvas {
         id
     }
 
+    pub fn add_configured_widget(
+        &mut self,
+        spec: &WidgetSpec,
+        widget: Box<dyn LcdWidget>,
+        position: (i32, i32),
+        size: (u32, u32),
+        opacity: u8,
+    ) -> WidgetId {
+        let id = WidgetId(self.next_id());
+        self.layers.push(WidgetLayer {
+            id,
+            type_id: spec.type_id,
+            widget,
+            position,
+            size,
+            visible: true,
+            opacity,
+        });
+        id
+    }
+
     pub fn remove_widget(&mut self, id: WidgetId) {
         self.layers.retain(|l| l.id != id);
         if self.active_layer == LayerSelection::Widget(id) {
             self.active_layer = LayerSelection::Base;
+        }
+    }
+
+    pub fn edit_active_widget(&mut self, edit: WidgetEdit) -> bool {
+        let Some(layer) = self.active_widget_layer_mut() else {
+            return false;
+        };
+        layer.widget.apply_edit(edit);
+        true
+    }
+
+    pub fn set_active_widget_opacity(&mut self, opacity: u8) -> bool {
+        let Some(layer) = self.active_widget_layer_mut() else {
+            return false;
+        };
+        layer.opacity = opacity;
+        true
+    }
+
+    pub fn zoom_active_layer(&mut self, factor: f32, source_size: Option<(u32, u32)>) -> bool {
+        match self.active_layer {
+            LayerSelection::Base => {
+                let Some(source_size) = source_size else {
+                    return false;
+                };
+                self.base_viewport.zoom = (self.base_viewport.zoom * factor).clamp(0.25, 10.0);
+                self.clamp_base_pan(source_size);
+                true
+            }
+            LayerSelection::Widget(_) => {
+                let Some(layer) = self.active_widget_layer_mut() else {
+                    return false;
+                };
+                let new_w = ((layer.size.0 as f32) * factor).round() as u32;
+                let new_h = ((layer.size.1 as f32) * factor).round() as u32;
+                layer.size = (new_w.clamp(10, 240), new_h.clamp(10, 240));
+                true
+            }
+        }
+    }
+
+    pub fn drag_active_layer(
+        &mut self,
+        delta: (f32, f32),
+        lcd_size: u32,
+        source_size: Option<(u32, u32)>,
+    ) -> bool {
+        match self.active_layer {
+            LayerSelection::Base => {
+                let Some(source_size) = source_size else {
+                    return false;
+                };
+                let (sw, sh) = (source_size.0 as f32, source_size.1 as f32);
+                let vis = sw.min(sh) / self.base_viewport.zoom;
+                let src_per_px = vis / lcd_size as f32;
+                self.base_viewport.pan.0 -= delta.0 * src_per_px;
+                self.base_viewport.pan.1 -= delta.1 * src_per_px;
+                self.clamp_base_pan(source_size);
+                true
+            }
+            LayerSelection::Widget(_) => {
+                let Some(layer) = self.active_widget_layer_mut() else {
+                    return false;
+                };
+                let size = layer.size;
+                let mut new_pos = (
+                    layer.position.0 + delta.0 as i32,
+                    layer.position.1 + delta.1 as i32,
+                );
+                let min_visible = 10i32;
+                let lcd = lcd_size as i32;
+                new_pos.0 = new_pos
+                    .0
+                    .clamp(-(size.0 as i32) + min_visible, lcd - min_visible);
+                new_pos.1 = new_pos
+                    .1
+                    .clamp(-(size.1 as i32) + min_visible, lcd - min_visible);
+                layer.position = new_pos;
+                true
+            }
+        }
+    }
+
+    pub fn reset_active_layer(&mut self, lcd_size: u32) -> bool {
+        match self.active_layer {
+            LayerSelection::Base => {
+                if self.base_viewport.zoom == 1.0 && self.base_viewport.pan == (0.0, 0.0) {
+                    return false;
+                }
+                self.base_viewport = Viewport::default();
+                true
+            }
+            LayerSelection::Widget(_) => {
+                let Some(layer) = self.active_widget_layer_mut() else {
+                    return false;
+                };
+                let default_size = layer.widget.descriptor().default_size;
+                let default_position = default_widget_position(lcd_size, default_size);
+                if layer.size == default_size && layer.position == default_position {
+                    return false;
+                }
+                layer.size = default_size;
+                layer.position = default_position;
+                true
+            }
+        }
+    }
+
+    pub fn active_layer_can_reset(&self, lcd_size: u32) -> bool {
+        match self.active_layer {
+            LayerSelection::Base => {
+                (self.base_viewport.zoom - 1.0).abs() > 0.01 || self.base_viewport.pan != (0.0, 0.0)
+            }
+            LayerSelection::Widget(_) => self
+                .active_widget_layer()
+                .map(|layer| {
+                    let default_size = layer.widget.descriptor().default_size;
+                    layer.size != default_size
+                        || layer.position != default_widget_position(lcd_size, default_size)
+                })
+                .unwrap_or(false),
+        }
+    }
+
+    pub fn active_layer_reset_status(&self) -> String {
+        match self.active_layer {
+            LayerSelection::Base => format!("{}%", (self.base_viewport.zoom * 100.0) as u32),
+            LayerSelection::Widget(_) => self
+                .active_widget_layer()
+                .map(|layer| format!("{}×{}", layer.size.0, layer.size.1))
+                .unwrap_or_default(),
         }
     }
 
@@ -163,4 +364,30 @@ impl Canvas {
         }
         changed
     }
+
+    fn clamp_base_pan(&mut self, source_size: (u32, u32)) {
+        let (sw, sh) = (source_size.0 as f32, source_size.1 as f32);
+        let short = sw.min(sh);
+        let vp = &mut self.base_viewport;
+        let vis = short / vp.zoom;
+
+        if vis <= sw && vis <= sh {
+            let max_pan_x = ((sw - vis) / 2.0).max(0.0);
+            let max_pan_y = ((sh - vis) / 2.0).max(0.0);
+            vp.pan.0 = vp.pan.0.clamp(-max_pan_x, max_pan_x);
+            vp.pan.1 = vp.pan.1.clamp(-max_pan_y, max_pan_y);
+        } else {
+            let margin = short / vp.zoom * 0.375;
+            vp.pan.0 = vp.pan.0.clamp(-margin, margin);
+            vp.pan.1 = vp.pan.1.clamp(-margin, margin);
+        }
+    }
+}
+
+fn default_widget_position(lcd_size: u32, widget_size: (u32, u32)) -> (i32, i32) {
+    let lcd = lcd_size as i32;
+    (
+        (lcd - widget_size.0 as i32) / 2,
+        (lcd - widget_size.1 as i32) / 2,
+    )
 }

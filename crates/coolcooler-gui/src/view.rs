@@ -4,7 +4,6 @@ use iced::widget::{
 use iced::{mouse, window, Background, Border, Color, Element, Length, Theme};
 use image::{Rgba, RgbaImage};
 
-use crate::canvas::LayerSelection;
 use crate::rendering::circular_preview_from_rgba;
 use crate::style::AppColors;
 use crate::{widget, CoolCooler, LayerOption, Message};
@@ -118,7 +117,7 @@ fn preview_canvas(app: &CoolCooler) -> Element<'_, Message> {
         let lcd = app.lcd_size();
         circular_preview_from_rgba(RgbaImage::from_pixel(lcd, lcd, Rgba([0, 0, 0, 255])))
     });
-    let is_widget_selected = matches!(app.canvas.active_layer, LayerSelection::Widget(_));
+    let is_widget_selected = app.canvas.active_widget_layer().is_some();
     let cursor_style = if app.dragging {
         mouse::Interaction::Grabbing
     } else if is_widget_selected {
@@ -164,40 +163,11 @@ fn canvas_header<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Element<'a, Messa
 }
 
 fn canvas_can_reset(app: &CoolCooler) -> bool {
-    match app.canvas.active_layer {
-        LayerSelection::Base => {
-            (app.canvas.base_viewport.zoom - 1.0).abs() > 0.01
-                || app.canvas.base_viewport.pan != (0.0, 0.0)
-        }
-        LayerSelection::Widget(id) => app
-            .canvas
-            .layers
-            .iter()
-            .find(|l| l.id == id)
-            .map(|l| {
-                let def = l.widget.descriptor().default_size;
-                l.size != def
-                    || l.position
-                        != (
-                            (app.lcd_size() as i32 - def.0 as i32) / 2,
-                            (app.lcd_size() as i32 - def.1 as i32) / 2,
-                        )
-            })
-            .unwrap_or(false),
-    }
+    app.canvas.active_layer_can_reset(app.lcd_size())
 }
 
 fn canvas_reset_status(app: &CoolCooler) -> String {
-    match app.canvas.active_layer {
-        LayerSelection::Base => format!("{}%", (app.canvas.base_viewport.zoom * 100.0) as u32),
-        LayerSelection::Widget(id) => app
-            .canvas
-            .layers
-            .iter()
-            .find(|l| l.id == id)
-            .map(|l| format!("{}×{}", l.size.0, l.size.1))
-            .unwrap_or_default(),
-    }
+    app.canvas.active_layer_reset_status()
 }
 
 fn layer_controls<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Element<'a, Message> {
@@ -212,13 +182,14 @@ fn layer_controls<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Element<'a, Mess
         .collect();
     let active_option = layer_options
         .iter()
-        .find(|o| o.selection == app.canvas.active_layer)
+        .find(|o| o.selection == app.canvas.active_layer())
         .cloned();
     let layer_picker = pick_list(layer_options, active_option, Message::SelectLayer)
         .width(Length::Fill)
         .text_size(13);
 
-    if let LayerSelection::Widget(id) = app.canvas.active_layer {
+    if let Some(layer) = app.canvas.active_widget_layer() {
+        let id = layer.id;
         row![
             text("Layer").size(12).color(c.text_dim),
             layer_picker,
@@ -251,11 +222,7 @@ fn layer_controls<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Element<'a, Mess
 }
 
 fn widget_config_card<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Option<Element<'a, Message>> {
-    let LayerSelection::Widget(id) = app.canvas.active_layer else {
-        return None;
-    };
-
-    app.canvas.layers.iter().find(|l| l.id == id).map(|layer| {
+    app.canvas.active_widget_layer().map(|layer| {
         let opacity_val = layer.opacity as f32 / 255.0;
         let config = layer.widget.config();
         let mut config_items = column![opacity_control(opacity_val, c)].spacing(8);

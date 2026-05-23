@@ -187,16 +187,18 @@ impl CoolCooler {
         (app, Task::batch([open_task.discard(), startup_task]))
     }
 
-    fn has_source(&self) -> bool {
-        !self.source_frames.is_empty()
-    }
-
     fn is_animated(&self) -> bool {
         self.source_frames.len() > 1
     }
 
     fn source_kind(&self) -> SourceKind {
         SourceKind::from_frame_count(self.source_frames.len())
+    }
+
+    fn current_source_size(&self) -> Option<(u32, u32)> {
+        self.source_frames
+            .get(self.current_frame)
+            .map(|src| (src.rgba.width(), src.rgba.height()))
     }
 
     fn canvas_policy(&self) -> CanvasPolicy {
@@ -219,7 +221,7 @@ impl CoolCooler {
     fn render_composited(&self) -> RgbaImage {
         let lcd = self.lcd_size();
         let base = if let Some(src) = self.source_frames.get(self.current_frame) {
-            let vp = &self.canvas.base_viewport;
+            let vp = self.canvas.base_viewport();
             render_base_rgba(&src.rgba, self.display.info(), vp.zoom, vp.pan)
         } else {
             RgbaImage::from_pixel(lcd, lcd, Rgba([0, 0, 0, 255]))
@@ -239,11 +241,8 @@ impl CoolCooler {
     }
 
     fn edit_active_widget(&mut self, edit: WidgetEdit) {
-        if let LayerSelection::Widget(id) = self.canvas.active_layer {
-            if let Some(layer) = self.canvas.layers.iter_mut().find(|l| l.id == id) {
-                layer.widget.apply_edit(edit);
-                self.commit_frame();
-            }
+        if self.canvas.edit_active_widget(edit) {
+            self.commit_frame();
         }
     }
 
@@ -258,7 +257,7 @@ impl CoolCooler {
 
         let widgets = self
             .canvas
-            .layers
+            .layers()
             .iter()
             .map(|layer| preset::WidgetLayerData {
                 type_id: layer.type_id.to_string(),
@@ -275,8 +274,8 @@ impl CoolCooler {
             name: name.to_string(),
             background: bg,
             viewport: preset::ViewportData {
-                zoom: self.canvas.base_viewport.zoom,
-                pan: self.canvas.base_viewport.pan,
+                zoom: self.canvas.base_viewport().zoom,
+                pan: self.canvas.base_viewport().pan,
             },
             widgets,
         }
@@ -285,12 +284,13 @@ impl CoolCooler {
     /// Apply a loaded preset's widget/viewport config to the current state.
     fn apply_preset_config(&mut self, data: &preset::PresetData) -> usize {
         // Restore base viewport
-        self.canvas.base_viewport.zoom = data.viewport.zoom;
-        self.canvas.base_viewport.pan = data.viewport.pan;
+        self.canvas.set_base_viewport(Viewport {
+            zoom: data.viewport.zoom,
+            pan: data.viewport.pan,
+        });
 
         // Clear existing widgets
-        self.canvas.layers.clear();
-        self.canvas.active_layer = canvas::LayerSelection::Base;
+        self.canvas.clear_widgets();
 
         // Recreate widgets from config
         let mut skipped_widgets = 0;
@@ -304,16 +304,8 @@ impl CoolCooler {
                 skipped_widgets += 1;
                 continue;
             }
-            let id = widget::WidgetId(self.canvas.next_id());
-            self.canvas.layers.push(canvas::WidgetLayer {
-                id,
-                type_id: spec.type_id,
-                widget: w,
-                position: wd.position,
-                size: wd.size,
-                visible: true,
-                opacity: wd.opacity,
-            });
+            self.canvas
+                .add_configured_widget(spec, w, wd.position, wd.size, wd.opacity);
         }
 
         self.rebuild_preview();
@@ -426,26 +418,6 @@ impl CoolCooler {
         self.display.join_finished();
     }
 
-    fn clamp_base_pan(&mut self) {
-        if let Some(src) = self.source_frames.get(self.current_frame) {
-            let (sw, sh) = (src.rgba.width() as f32, src.rgba.height() as f32);
-            let short = sw.min(sh);
-            let vp = &mut self.canvas.base_viewport;
-            let vis = short / vp.zoom;
-
-            if vis <= sw && vis <= sh {
-                let max_pan_x = ((sw - vis) / 2.0).max(0.0);
-                let max_pan_y = ((sh - vis) / 2.0).max(0.0);
-                vp.pan.0 = vp.pan.0.clamp(-max_pan_x, max_pan_x);
-                vp.pan.1 = vp.pan.1.clamp(-max_pan_y, max_pan_y);
-            } else {
-                let margin = short / vp.zoom * 0.375;
-                vp.pan.0 = vp.pan.0.clamp(-margin, margin);
-                vp.pan.1 = vp.pan.1.clamp(-margin, margin);
-            }
-        }
-    }
-
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::SelectFile => {
@@ -457,7 +429,7 @@ impl CoolCooler {
                 self.source_frames.clear();
                 self.preview = None;
                 self.loading = true;
-                self.canvas.base_viewport = Viewport::default();
+                self.canvas.set_base_viewport(Viewport::default());
                 self.current_frame = 0;
                 self.status_message = "Loading...".to_string();
 
@@ -492,9 +464,8 @@ impl CoolCooler {
                             self.display.capability(),
                             SourceKind::from_frame_count(count),
                         );
-                        if !policy.widgets_allowed() && !self.canvas.layers.is_empty() {
-                            self.canvas.layers.clear();
-                            self.canvas.active_layer = LayerSelection::Base;
+                        if !policy.widgets_allowed() && self.canvas.has_widgets() {
+                            self.canvas.clear_widgets();
                         }
 
                         let detail = if count > 1 {
@@ -525,11 +496,7 @@ impl CoolCooler {
             }
             Message::WidgetTick => {
                 // Refresh sysinfo backend
-                let has_sysinfo_widgets = self
-                    .canvas
-                    .layers
-                    .iter()
-                    .any(|l| l.widget.descriptor().category == "System Metrics");
+                let has_sysinfo_widgets = self.canvas.has_widgets_in_category("System Metrics");
                 if has_sysinfo_widgets {
                     self.sysinfo_backend.refresh();
                     self.widget_ctx.sysinfo = self.sysinfo_backend.data().clone();
@@ -546,24 +513,11 @@ impl CoolCooler {
                 };
                 let factor = 1.1_f32.powf(y);
 
-                match self.canvas.active_layer {
-                    LayerSelection::Base => {
-                        if self.has_source() {
-                            let vp = &mut self.canvas.base_viewport;
-                            vp.zoom = (vp.zoom * factor).clamp(0.25, 10.0);
-                            self.clamp_base_pan();
-                            self.commit_frame();
-                        }
-                    }
-                    LayerSelection::Widget(id) => {
-                        if let Some(layer) = self.canvas.layers.iter_mut().find(|l| l.id == id) {
-                            // Scale widget size
-                            let new_w = ((layer.size.0 as f32) * factor).round() as u32;
-                            let new_h = ((layer.size.1 as f32) * factor).round() as u32;
-                            layer.size = (new_w.clamp(10, 240), new_h.clamp(10, 240));
-                            self.commit_frame();
-                        }
-                    }
+                if self
+                    .canvas
+                    .zoom_active_layer(factor, self.current_source_size())
+                {
+                    self.commit_frame();
                 }
             }
             Message::DragStart => {
@@ -575,43 +529,12 @@ impl CoolCooler {
                     if let Some(last) = self.last_cursor {
                         let dx = pos.x - last.x;
                         let dy = pos.y - last.y;
-                        let lcd = self.lcd_size();
-
-                        match self.canvas.active_layer {
-                            LayerSelection::Base => {
-                                if let Some(src) = self.source_frames.get(self.current_frame) {
-                                    let (sw, sh) =
-                                        (src.rgba.width() as f32, src.rgba.height() as f32);
-                                    let vis = sw.min(sh) / self.canvas.base_viewport.zoom;
-                                    let src_per_px = vis / lcd as f32;
-                                    let vp = &mut self.canvas.base_viewport;
-                                    vp.pan.0 -= dx * src_per_px;
-                                    vp.pan.1 -= dy * src_per_px;
-                                    self.clamp_base_pan();
-                                    self.commit_frame();
-                                }
-                            }
-                            LayerSelection::Widget(id) => {
-                                if let Some(layer) =
-                                    self.canvas.layers.iter_mut().find(|l| l.id == id)
-                                {
-                                    let size = layer.size;
-                                    let mut new_pos = (
-                                        layer.position.0 + dx as i32,
-                                        layer.position.1 + dy as i32,
-                                    );
-                                    let min_vis = 10i32;
-                                    let lcd_i = lcd as i32;
-                                    new_pos.0 = new_pos
-                                        .0
-                                        .clamp(-(size.0 as i32) + min_vis, lcd_i - min_vis);
-                                    new_pos.1 = new_pos
-                                        .1
-                                        .clamp(-(size.1 as i32) + min_vis, lcd_i - min_vis);
-                                    layer.position = new_pos;
-                                    self.commit_frame();
-                                }
-                            }
+                        if self.canvas.drag_active_layer(
+                            (dx, dy),
+                            self.lcd_size(),
+                            self.current_source_size(),
+                        ) {
+                            self.commit_frame();
                         }
                     }
                     self.last_cursor = Some(pos);
@@ -622,26 +545,12 @@ impl CoolCooler {
                 self.last_cursor = None;
             }
             Message::ResetView => {
-                match self.canvas.active_layer {
-                    LayerSelection::Base => {
-                        self.canvas.base_viewport = Viewport::default();
-                    }
-                    LayerSelection::Widget(id) => {
-                        let lcd = self.lcd_size() as i32;
-                        if let Some(layer) = self.canvas.layers.iter_mut().find(|l| l.id == id) {
-                            let default_size = layer.widget.descriptor().default_size;
-                            layer.size = default_size;
-                            layer.position = (
-                                (lcd - default_size.0 as i32) / 2,
-                                (lcd - default_size.1 as i32) / 2,
-                            );
-                        }
-                    }
+                if self.canvas.reset_active_layer(self.lcd_size()) {
+                    self.commit_frame();
                 }
-                self.commit_frame();
             }
             Message::SelectLayer(option) => {
-                self.canvas.active_layer = option.selection;
+                self.canvas.select_layer(option.selection);
             }
             Message::SelectCategory(cat) => {
                 self.selected_category = cat;
@@ -653,7 +562,7 @@ impl CoolCooler {
                 }
                 if let Some(spec) = self.widget_catalog.get(catalog_idx) {
                     let id = self.canvas.add_widget(spec, self.lcd_size());
-                    self.canvas.active_layer = LayerSelection::Widget(id);
+                    self.canvas.select_layer(LayerSelection::Widget(id));
                     self.commit_frame();
                 }
             }
@@ -662,11 +571,8 @@ impl CoolCooler {
                 self.commit_frame();
             }
             Message::SetWidgetOpacity(val) => {
-                if let LayerSelection::Widget(id) = self.canvas.active_layer {
-                    if let Some(layer) = self.canvas.layers.iter_mut().find(|l| l.id == id) {
-                        layer.opacity = (val * 255.0) as u8;
-                        self.commit_frame();
-                    }
+                if self.canvas.set_active_widget_opacity((val * 255.0) as u8) {
+                    self.commit_frame();
                 }
             }
             Message::SetWidgetTextColor(color) => {
@@ -870,7 +776,11 @@ impl CoolCooler {
         }
 
         // 1s tick for dynamic widgets (clock, date, sysinfo)
-        let has_dynamic = self.canvas.layers.iter().any(|l| l.widget.is_dynamic());
+        let has_dynamic = self
+            .canvas
+            .layers()
+            .iter()
+            .any(|layer| layer.widget.is_dynamic());
         if has_dynamic {
             subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::WidgetTick));
         }
