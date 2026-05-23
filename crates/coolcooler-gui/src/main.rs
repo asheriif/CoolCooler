@@ -19,7 +19,7 @@ use composition::{CanvasPolicy, SourceKind};
 use coolcooler_core::frame::{self, DEFAULT_JPEG_QUALITY};
 use coolcooler_core::DeviceInfo;
 use coolcooler_driver::DisplayCapability;
-use display_session::DisplaySession;
+use display_session::DisplayController;
 use iced::{mouse, window, Color, Element, Point, Subscription, Task, Theme};
 use image::{DynamicImage, Rgba, RgbaImage};
 use rendering::{circular_preview_from_rgba, render_base_rgba};
@@ -96,9 +96,7 @@ struct CoolCooler {
     last_preset_click: Option<(String, Instant)>,
 
     status_message: String,
-    display_session: Option<DisplaySession>,
-    stopping_display_session: Option<DisplaySession>,
-    pending_display_start: bool,
+    display: DisplayController,
 
     // Tray icon
     _tray_handle: tray::TrayHandle,
@@ -195,9 +193,7 @@ impl CoolCooler {
             preset_list: Vec::new(),
             last_preset_click: None,
             status_message: String::new(),
-            display_session: None,
-            stopping_display_session: None,
-            pending_display_start: false,
+            display: DisplayController::new(),
             _tray_handle: tray_handle,
             tray_rx: Arc::new(Mutex::new(tray_rx)),
             window_id: Some(id),
@@ -259,11 +255,8 @@ impl CoolCooler {
 
     fn commit_frame(&mut self) {
         let composited = self.render_composited();
-        if let (Some(session), Some(bytes)) = (
-            self.display_session.as_ref(),
-            self.encode_device_frame(&composited),
-        ) {
-            session.submit_frame(bytes);
+        if let Some(bytes) = self.encode_device_frame(&composited) {
+            self.display.submit_frame(bytes);
         }
         self.preview = Some(circular_preview_from_rgba(composited));
     }
@@ -444,54 +437,19 @@ impl CoolCooler {
 
     /// Start (or restart) the device display thread.
     fn start_display(&mut self) {
-        self.request_display_stop();
-        if self.stopping_display_session.is_some() {
-            self.pending_display_start = true;
-            return;
-        }
-
-        self.start_display_now();
-    }
-
-    fn start_display_now(&mut self) {
-        if !self.driver_connected {
-            return;
-        }
-
-        if let (Some(driver), Some(frame)) = (
-            coolcooler_driver::detect_device(),
-            self.encode_current_device_frame(),
-        ) {
-            self.display_session = Some(DisplaySession::start(driver, frame));
-        }
+        let initial_frame = self
+            .driver_connected
+            .then(|| self.encode_current_device_frame())
+            .flatten();
+        self.display.restart(initial_frame);
     }
 
     fn stop_display(&mut self) {
-        self.pending_display_start = false;
-        self.request_display_stop();
-    }
-
-    fn request_display_stop(&mut self) {
-        if let Some(session) = self.display_session.take() {
-            session.request_stop();
-            self.stopping_display_session = Some(session);
-        }
+        self.display.stop();
     }
 
     fn reap_stopped_display(&mut self) {
-        let stopped = self
-            .stopping_display_session
-            .as_mut()
-            .is_some_and(DisplaySession::join_if_finished);
-        if !stopped {
-            return;
-        }
-
-        self.stopping_display_session = None;
-        if self.pending_display_start {
-            self.pending_display_start = false;
-            self.start_display_now();
-        }
+        self.display.join_finished();
     }
 
     fn encode_current_device_frame(&self) -> Option<Vec<u8>> {
@@ -965,7 +923,7 @@ impl CoolCooler {
             subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::WidgetTick));
         }
 
-        if self.stopping_display_session.is_some() {
+        if self.display.is_stopping() {
             subs.push(
                 iced::time::every(Duration::from_millis(100)).map(|_| Message::DisplayStopPoll),
             );

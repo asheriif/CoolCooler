@@ -4,6 +4,108 @@ use std::thread;
 
 use coolcooler_driver::DisplayDriver;
 
+pub(crate) struct DisplayController {
+    state: DisplayState,
+}
+
+enum DisplayState {
+    Idle,
+    Running(DisplaySession),
+    Stopping {
+        session: DisplaySession,
+        pending_restart: Option<Vec<u8>>,
+    },
+}
+
+impl DisplayController {
+    pub(crate) fn new() -> Self {
+        Self {
+            state: DisplayState::Idle,
+        }
+    }
+
+    pub(crate) fn restart(&mut self, initial_frame: Option<Vec<u8>>) {
+        match std::mem::replace(&mut self.state, DisplayState::Idle) {
+            DisplayState::Idle => self.start(initial_frame),
+            DisplayState::Running(session) => {
+                session.request_stop();
+                self.state = DisplayState::Stopping {
+                    session,
+                    pending_restart: initial_frame,
+                };
+            }
+            DisplayState::Stopping { session, .. } => {
+                self.state = DisplayState::Stopping {
+                    session,
+                    pending_restart: initial_frame,
+                };
+            }
+        }
+    }
+
+    pub(crate) fn stop(&mut self) {
+        match std::mem::replace(&mut self.state, DisplayState::Idle) {
+            DisplayState::Idle => {
+                self.state = DisplayState::Idle;
+            }
+            DisplayState::Running(session) => {
+                session.request_stop();
+                self.state = DisplayState::Stopping {
+                    session,
+                    pending_restart: None,
+                };
+            }
+            DisplayState::Stopping { session, .. } => {
+                self.state = DisplayState::Stopping {
+                    session,
+                    pending_restart: None,
+                };
+            }
+        }
+    }
+
+    pub(crate) fn submit_frame(&self, bytes: Vec<u8>) {
+        if let DisplayState::Running(session) = &self.state {
+            session.submit_frame(bytes);
+        }
+    }
+
+    pub(crate) fn join_finished(&mut self) {
+        match std::mem::replace(&mut self.state, DisplayState::Idle) {
+            DisplayState::Stopping {
+                mut session,
+                pending_restart,
+            } => {
+                if session.join_if_finished() {
+                    self.start(pending_restart);
+                } else {
+                    self.state = DisplayState::Stopping {
+                        session,
+                        pending_restart,
+                    };
+                }
+            }
+            state => {
+                self.state = state;
+            }
+        }
+    }
+
+    pub(crate) fn is_stopping(&self) -> bool {
+        matches!(self.state, DisplayState::Stopping { .. })
+    }
+
+    fn start(&mut self, initial_frame: Option<Vec<u8>>) {
+        if let Some((driver, frame)) = initial_frame
+            .and_then(|frame| coolcooler_driver::detect_device().map(|driver| (driver, frame)))
+        {
+            self.state = DisplayState::Running(DisplaySession::start(driver, frame));
+        } else {
+            self.state = DisplayState::Idle;
+        }
+    }
+}
+
 pub(crate) struct DisplaySession {
     stop: Arc<AtomicBool>,
     shared_frame: Arc<Mutex<Vec<u8>>>,
