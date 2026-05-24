@@ -4,7 +4,7 @@ use iced::Task;
 
 use crate::canvas::Viewport;
 use crate::composition::{CanvasPolicy, SourceKind};
-use crate::source::{load_source_data, LoadedData, SourceLoadRequest};
+use crate::source::{load_source_data, LoadedData, SourceLoadMode, SourceLoadRequest};
 use crate::windowing::pick_file;
 use crate::{CoolCooler, Message};
 
@@ -18,7 +18,9 @@ impl CoolCooler {
             return Task::none();
         };
 
-        let request = self.source.begin_loading(path);
+        let request = self
+            .source
+            .begin_loading(path, SourceLoadMode::ReplaceCurrent);
         let task_request = request.clone();
         self.stop_display();
         self.ui.preview = None;
@@ -38,7 +40,7 @@ impl CoolCooler {
     ) {
         match result {
             Ok(data) => {
-                let Some(summary) = self.source.complete_loading(&request, data, None) else {
+                let Some(summary) = self.source.complete_loading(&request, data) else {
                     return;
                 };
 

@@ -55,6 +55,12 @@ impl SourceLoadRequest {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SourceLoadMode {
+    ReplaceCurrent,
+    PreserveCurrentUntilLoaded,
+}
+
 #[derive(Debug)]
 pub(crate) struct SourceState {
     path: Option<PathBuf>,
@@ -112,19 +118,18 @@ impl SourceState {
         self.frames.get(self.current_frame)
     }
 
-    pub(crate) fn begin_loading(&mut self, path: PathBuf) -> SourceLoadRequest {
+    pub(crate) fn begin_loading(
+        &mut self,
+        path: PathBuf,
+        mode: SourceLoadMode,
+    ) -> SourceLoadRequest {
         let request = self.next_load_request(path);
-        self.path = Some(request.path.clone());
-        self.frames.clear();
-        self.filename = request.filename.clone();
-        self.loading = true;
-        self.pending_load_id = Some(request.id);
-        self.reset_animation();
-        request
-    }
-
-    pub(crate) fn begin_background_loading(&mut self, path: PathBuf) -> SourceLoadRequest {
-        let request = self.next_load_request(path);
+        if mode == SourceLoadMode::ReplaceCurrent {
+            self.path = Some(request.path.clone());
+            self.frames.clear();
+            self.filename = request.filename.clone();
+            self.reset_animation();
+        }
         self.loading = true;
         self.pending_load_id = Some(request.id);
         request
@@ -134,14 +139,12 @@ impl SourceState {
         &mut self,
         request: &SourceLoadRequest,
         data: LoadedData,
-        path: Option<PathBuf>,
     ) -> Option<SourceSummary> {
         if !self.is_current_load(request) {
             return None;
         }
         self.pending_load_id = None;
-        let path = path.unwrap_or_else(|| request.path.clone());
-        Some(self.replace_with_loaded(data, Some(path)))
+        Some(self.replace_with_loaded(data, Some(request.path.clone())))
     }
 
     pub(crate) fn fail_loading(&mut self, request: &SourceLoadRequest) -> bool {
@@ -288,7 +291,10 @@ mod tests {
     #[test]
     fn clear_removes_source_path_frames_and_loading_together() {
         let mut source = SourceState::new();
-        source.begin_loading(PathBuf::from("/tmp/demo.png"));
+        source.begin_loading(
+            PathBuf::from("/tmp/demo.png"),
+            SourceLoadMode::ReplaceCurrent,
+        );
         source.replace_with_loaded(
             loaded_data("demo.png"),
             Some(PathBuf::from("/tmp/demo.png")),
@@ -319,18 +325,45 @@ mod tests {
     #[test]
     fn stale_load_completion_is_ignored() {
         let mut source = SourceState::new();
-        let first = source.begin_loading(PathBuf::from("/tmp/first.png"));
-        let second = source.begin_loading(PathBuf::from("/tmp/second.png"));
+        let first = source.begin_loading(
+            PathBuf::from("/tmp/first.png"),
+            SourceLoadMode::ReplaceCurrent,
+        );
+        let second = source.begin_loading(
+            PathBuf::from("/tmp/second.png"),
+            SourceLoadMode::ReplaceCurrent,
+        );
 
         assert!(source
-            .complete_loading(&first, loaded_data("first.png"), None)
+            .complete_loading(&first, loaded_data("first.png"))
             .is_none());
 
         let summary = source
-            .complete_loading(&second, loaded_data("second.png"), None)
+            .complete_loading(&second, loaded_data("second.png"))
             .expect("latest load should apply");
 
         assert_eq!(summary.filename, "second.png");
         assert_eq!(source.path(), Some(Path::new("/tmp/second.png")));
+    }
+
+    #[test]
+    fn preserved_load_keeps_current_source_until_completion() {
+        let mut source = SourceState::new();
+        source.replace_with_loaded(loaded_data("old.png"), Some(PathBuf::from("/tmp/old.png")));
+
+        let request = source.begin_loading(
+            PathBuf::from("/tmp/new.png"),
+            SourceLoadMode::PreserveCurrentUntilLoaded,
+        );
+
+        assert_eq!(source.path(), Some(Path::new("/tmp/old.png")));
+        assert_eq!(source.current_size(), Some((4, 4)));
+
+        let summary = source
+            .complete_loading(&request, loaded_data("new.png"))
+            .expect("preserved load should still complete");
+
+        assert_eq!(summary.filename, "new.png");
+        assert_eq!(source.path(), Some(Path::new("/tmp/new.png")));
     }
 }

@@ -109,12 +109,9 @@ impl CoolCooler {
             Message::PresetSourceLoaded {
                 request,
                 result,
-                data,
-                folder,
-                background_path,
-                silent,
+                job,
             } => {
-                self.preset_source_loaded(request, result, data, folder, background_path, silent);
+                self.preset_source_loaded(request, result, job);
                 Task::none()
             }
             Message::DeletePreset(folder) => {

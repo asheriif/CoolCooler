@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use iced::Task;
 
 use crate::canvas::{Canvas, Viewport};
-use crate::source::{load_source_data, LoadedData, SourceLoadRequest};
+use crate::source::{load_source_data, LoadedData, SourceLoadMode, SourceLoadRequest};
 use crate::{preset, widget, CoolCooler, Message};
 
 #[derive(Debug, Clone)]
@@ -19,6 +19,13 @@ pub(crate) struct PresetState {
     pub(crate) save_name_input: String,
     pub(crate) list: Vec<preset::PresetEntry>,
     last_click: Option<(preset::PresetFolder, Instant)>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PresetLoadJob {
+    folder: preset::PresetFolder,
+    data: preset::PresetData,
+    silent: bool,
 }
 
 impl PresetState {
@@ -136,8 +143,15 @@ impl CoolCooler {
                 return Task::none();
             }
 
-            let request = self.source.begin_background_loading(path.clone());
+            let request = self
+                .source
+                .begin_loading(path, SourceLoadMode::PreserveCurrentUntilLoaded);
             let task_request = request.clone();
+            let job = PresetLoadJob {
+                folder,
+                data,
+                silent,
+            };
 
             if !silent {
                 self.ui.status_message = "Loading preset...".to_string();
@@ -150,10 +164,7 @@ impl CoolCooler {
                 move |result| Message::PresetSourceLoaded {
                     request,
                     result,
-                    data,
-                    folder,
-                    background_path: Some(path),
-                    silent,
+                    job,
                 },
             );
         }
@@ -252,23 +263,16 @@ impl CoolCooler {
         &mut self,
         request: SourceLoadRequest,
         result: Result<LoadedData, String>,
-        data: preset::PresetData,
-        folder: preset::PresetFolder,
-        background_path: Option<std::path::PathBuf>,
-        silent: bool,
+        job: PresetLoadJob,
     ) {
         match result {
             Ok(loaded) => {
-                if self
-                    .source
-                    .complete_loading(&request, loaded, background_path)
-                    .is_some()
-                {
-                    self.apply_loaded_preset(folder, data, silent);
+                if self.source.complete_loading(&request, loaded).is_some() {
+                    self.apply_loaded_preset(job.folder, job.data, job.silent);
                 }
             }
             Err(e) => {
-                if self.source.fail_loading(&request) && !silent {
+                if self.source.fail_loading(&request) && !job.silent {
                     self.ui.status_message = format!("Load failed: {e}");
                 }
             }

@@ -134,10 +134,7 @@ enum Message {
     PresetSourceLoaded {
         request: SourceLoadRequest,
         result: Result<LoadedData, String>,
-        data: preset::PresetData,
-        folder: preset::PresetFolder,
-        background_path: Option<PathBuf>,
-        silent: bool,
+        job: preset_flow::PresetLoadJob,
     },
     ToggleTheme,
     WindowClosed(window::Id),
