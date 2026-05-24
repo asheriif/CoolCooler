@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use iced::Task;
 
-use crate::canvas::Viewport;
+use crate::canvas::{Canvas, Viewport};
 use crate::source::{load_source_data, LoadedData, SourceLoadRequest};
 use crate::{preset, widget, CoolCooler, Message};
 
@@ -94,6 +94,8 @@ impl CoolCooler {
     }
 
     pub(crate) fn apply_preset_config(&mut self, data: &preset::PresetData) -> usize {
+        let widgets_allowed = self.canvas_policy().widgets_allowed();
+
         self.canvas.set_base_viewport(Viewport {
             zoom: data.viewport.zoom,
             pan: data.viewport.pan,
@@ -101,20 +103,8 @@ impl CoolCooler {
 
         self.canvas.clear_widgets();
 
-        let mut skipped_widgets = 0;
-        for wd in &data.widgets {
-            let Some(spec) = widget::spec_by_type_id(&wd.type_id) else {
-                skipped_widgets += 1;
-                continue;
-            };
-            let mut w = spec.create();
-            if w.apply_preset_config(&wd.config).is_err() {
-                skipped_widgets += 1;
-                continue;
-            }
-            self.canvas
-                .add_configured_widget(spec, w, wd.position, wd.size, wd.opacity);
-        }
+        let skipped_widgets =
+            restore_preset_widgets(&mut self.canvas, &data.widgets, widgets_allowed);
 
         self.rebuild_preview();
         skipped_widgets
@@ -303,5 +293,72 @@ impl CoolCooler {
             self.source.clear();
             self.commit_frame();
         }
+    }
+}
+
+fn restore_preset_widgets(
+    canvas: &mut Canvas,
+    widgets: &[preset::WidgetLayerData],
+    widgets_allowed: bool,
+) -> usize {
+    let mut skipped_widgets = 0;
+    for wd in widgets {
+        if !widgets_allowed {
+            skipped_widgets += 1;
+            continue;
+        }
+
+        let Some(spec) = widget::spec_by_type_id(&wd.type_id) else {
+            skipped_widgets += 1;
+            continue;
+        };
+        let mut w = spec.create();
+        if w.apply_preset_config(&wd.config).is_err() {
+            skipped_widgets += 1;
+            continue;
+        }
+        canvas.add_configured_widget(spec, w, wd.position, wd.size, wd.opacity);
+    }
+
+    skipped_widgets
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn text_widget_layer() -> preset::WidgetLayerData {
+        preset::WidgetLayerData {
+            type_id: "free_text".to_string(),
+            position: (10, 20),
+            size: (80, 28),
+            opacity: 255,
+            config: json!({
+                "text": "Label",
+                "color": [255, 255, 255, 255],
+                "font": "Inter"
+            }),
+        }
+    }
+
+    #[test]
+    fn preset_widgets_are_skipped_when_policy_disallows_them() {
+        let mut canvas = Canvas::new();
+
+        let skipped = restore_preset_widgets(&mut canvas, &[text_widget_layer()], false);
+
+        assert_eq!(skipped, 1);
+        assert!(canvas.layers().is_empty());
+    }
+
+    #[test]
+    fn preset_widgets_restore_when_policy_allows_them() {
+        let mut canvas = Canvas::new();
+
+        let skipped = restore_preset_widgets(&mut canvas, &[text_widget_layer()], true);
+
+        assert_eq!(skipped, 0);
+        assert_eq!(canvas.layers().len(), 1);
     }
 }
