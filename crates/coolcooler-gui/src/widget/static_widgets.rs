@@ -1,7 +1,7 @@
 use image::{Rgba, RgbaImage};
 use imageproc::drawing::{draw_filled_circle_mut, draw_hollow_circle_mut};
 
-use super::text::{from_value, to_value, TextState};
+use super::text::{from_value, to_value, TextWidgetCore};
 use super::{
     CircleWidgetConfig, ColorWidgetConfig, LcdWidget, WidgetContext, WidgetControl,
     WidgetDescriptor, WidgetEdit,
@@ -22,40 +22,47 @@ pub const FREE_TEXT_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
 
 #[derive(Debug)]
 pub struct FreeText {
-    text: TextState,
+    text: TextWidgetCore,
 }
 
 impl FreeText {
     pub fn new() -> Self {
         Self {
-            text: TextState::new("Text", [255, 255, 255, 255]),
+            text: TextWidgetCore::new(
+                &FREE_TEXT_DESCRIPTOR,
+                "Text",
+                [255, 255, 255, 255],
+                0.7,
+                true,
+                false,
+            ),
         }
     }
 }
 
 impl LcdWidget for FreeText {
     fn descriptor(&self) -> &WidgetDescriptor {
-        &FREE_TEXT_DESCRIPTOR
+        self.text.descriptor()
     }
 
     fn render(&self, width: u32, height: u32, _ctx: &WidgetContext) -> RgbaImage {
-        self.text.render(width, height, 0.7)
+        self.text.render(width, height)
     }
 
     fn preset_config(&self) -> serde_json::Value {
-        self.text.config_value(true)
+        self.text.preset_config()
     }
 
     fn controls(&self) -> Vec<WidgetControl<'_>> {
-        self.text.controls(true)
+        self.text.controls()
     }
 
     fn apply_preset_config(&mut self, config: &serde_json::Value) -> Result<(), &'static str> {
-        self.text.apply_preset_config(config, true)
+        self.text.apply_preset_config(config)
     }
 
     fn apply_edit(&mut self, edit: WidgetEdit) {
-        self.text.apply_edit(edit, true);
+        self.text.apply_edit(edit);
     }
 }
 

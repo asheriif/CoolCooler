@@ -145,14 +145,16 @@ fn write_preset_contents(
     preview_rgba: &RgbaImage,
     data: &PresetData,
 ) -> Result<(), String> {
-    if let Some(src) = source_image_path {
-        if src.exists() {
-            let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("png");
-            let asset = PresetAsset::parse(format!("background.{ext}"))
-                .ok_or_else(|| "Background file name is not safe".to_string())?;
-            let dest = preset_dir.join(asset.as_str());
-            fs::copy(src, &dest).map_err(|e| format!("Failed to copy background: {e}"))?;
+    if let Some(background) = &data.background {
+        let src = source_image_path
+            .ok_or_else(|| "Preset has a background but no source image path".to_string())?;
+        if !src.exists() {
+            return Err("Background source file no longer exists".to_string());
         }
+        let asset = PresetAsset::parse(background.file.clone())
+            .ok_or_else(|| "Background file name is not safe".to_string())?;
+        let dest = preset_dir.join(asset.as_str());
+        fs::copy(src, &dest).map_err(|e| format!("Failed to copy background: {e}"))?;
     }
 
     let preview_path = preset_dir.join("preview.png");

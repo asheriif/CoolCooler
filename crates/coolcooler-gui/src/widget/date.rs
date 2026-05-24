@@ -1,7 +1,7 @@
 use chrono::Local;
 use image::RgbaImage;
 
-use super::text::TextState;
+use super::text::TextWidgetCore;
 use super::{LcdWidget, WidgetContext, WidgetControl, WidgetDescriptor, WidgetEdit};
 
 pub const DATE_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
@@ -12,15 +12,19 @@ pub const DATE_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
 
 #[derive(Debug)]
 pub struct DateWidget {
-    text: TextState,
+    text: TextWidgetCore,
 }
 
 impl DateWidget {
     pub fn new() -> Self {
         Self {
-            text: TextState::new(
+            text: TextWidgetCore::new(
+                &DATE_DESCRIPTOR,
                 Local::now().format("%b %d, %Y").to_string(),
                 [220, 220, 220, 255],
+                0.65,
+                false,
+                true,
             ),
         }
     }
@@ -28,15 +32,15 @@ impl DateWidget {
 
 impl LcdWidget for DateWidget {
     fn descriptor(&self) -> &WidgetDescriptor {
-        &DATE_DESCRIPTOR
+        self.text.descriptor()
     }
 
     fn render(&self, width: u32, height: u32, _ctx: &WidgetContext) -> RgbaImage {
-        self.text.render(width, height, 0.65)
+        self.text.render(width, height)
     }
 
     fn is_dynamic(&self) -> bool {
-        true
+        self.text.is_dynamic()
     }
 
     fn tick(&mut self, _ctx: &WidgetContext) -> bool {
@@ -45,18 +49,18 @@ impl LcdWidget for DateWidget {
     }
 
     fn preset_config(&self) -> serde_json::Value {
-        self.text.config_value(false)
+        self.text.preset_config()
     }
 
     fn controls(&self) -> Vec<WidgetControl<'_>> {
-        self.text.controls(false)
+        self.text.controls()
     }
 
     fn apply_preset_config(&mut self, config: &serde_json::Value) -> Result<(), &'static str> {
-        self.text.apply_preset_config(config, false)
+        self.text.apply_preset_config(config)
     }
 
     fn apply_edit(&mut self, edit: WidgetEdit) {
-        self.text.apply_edit(edit, false);
+        self.text.apply_edit(edit);
     }
 }

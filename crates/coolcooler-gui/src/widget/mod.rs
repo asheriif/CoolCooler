@@ -33,6 +33,47 @@ pub struct WidgetContext {
     pub sysinfo: sysinfo_backend::SysInfoData,
 }
 
+pub(crate) struct WidgetRuntime {
+    catalog: &'static [WidgetSpec],
+    selected_category: String,
+    sysinfo_backend: sysinfo_backend::SysInfoBackend,
+    ctx: WidgetContext,
+}
+
+impl WidgetRuntime {
+    pub(crate) fn new() -> Self {
+        Self {
+            catalog: catalog(),
+            selected_category: "Static".to_string(),
+            sysinfo_backend: sysinfo_backend::SysInfoBackend::new(),
+            ctx: WidgetContext::default(),
+        }
+    }
+
+    pub(crate) fn catalog(&self) -> &'static [WidgetSpec] {
+        self.catalog
+    }
+
+    pub(crate) fn selected_category(&self) -> &str {
+        &self.selected_category
+    }
+
+    pub(crate) fn select_category(&mut self, category: String) {
+        self.selected_category = category;
+    }
+
+    pub(crate) fn context(&self) -> &WidgetContext {
+        &self.ctx
+    }
+
+    pub(crate) fn refresh_if_needed(&mut self, needs_sysinfo: bool) {
+        if needs_sysinfo {
+            self.sysinfo_backend.refresh();
+            self.ctx.sysinfo = self.sysinfo_backend.data().clone();
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WidgetControl<'a> {
     Color([u8; 4]),

@@ -18,15 +18,18 @@ mod window_flow;
 mod windowing;
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use canvas::{Canvas, LayerSelection};
+use canvas_editor::CanvasInteraction;
 use display_session::DisplayController;
+use iced::widget::image::Handle;
 use iced::{mouse, window, Color, Element, Point, Subscription, Task, Theme};
-use source::{LoadedData, SourceState};
+use preset_flow::PresetState;
+use source::{LoadedData, SourceLoadRequest, SourceState};
 use style::{AppColors, DARK, LIGHT};
-use widget::{sysinfo_backend::SysInfoBackend, WidgetContext, WidgetSpec};
+use widget::WidgetRuntime;
+use window_flow::WindowState;
 use windowing::{app_window_settings, ensure_single_instance};
 
 /// Layer option for the pick_list dropdown.
@@ -56,7 +59,7 @@ fn main() -> iced::Result {
 }
 
 struct CoolCooler {
-    dark_mode: bool,
+    ui: UiState,
 
     // Source data
     source: SourceState,
@@ -65,46 +68,43 @@ struct CoolCooler {
     canvas: Canvas,
 
     // Interaction
-    dragging: bool,
-    last_cursor: Option<Point>,
+    interaction: CanvasInteraction,
 
     // Widget catalog + backends
-    widget_catalog: &'static [WidgetSpec],
-    selected_category: String,
-    sysinfo_backend: SysInfoBackend,
-    widget_ctx: WidgetContext,
-
-    // Cached preview
-    preview: Option<iced::widget::image::Handle>,
+    widgets: WidgetRuntime,
 
     // Presets
-    current_preset: Option<CurrentPreset>,
-    show_save_dialog: bool,
-    show_load_dialog: bool,
-    save_name_input: String,
-    preset_list: Vec<preset::PresetEntry>,
-    last_preset_click: Option<(preset::PresetFolder, Instant)>,
+    presets: PresetState,
 
-    status_message: String,
     display: DisplayController,
 
-    // Tray icon
-    _tray_handle: tray::TrayHandle,
-    tray_rx: Arc<Mutex<std::sync::mpsc::Receiver<tray::TrayEvent>>>,
-    window_id: Option<window::Id>,
+    windows: WindowState,
 }
 
-#[derive(Debug, Clone)]
-struct CurrentPreset {
-    folder: preset::PresetFolder,
-    name: String,
+struct UiState {
+    dark_mode: bool,
+    preview: Option<Handle>,
+    status_message: String,
+}
+
+impl UiState {
+    fn new() -> Self {
+        Self {
+            dark_mode: true,
+            preview: None,
+            status_message: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 enum Message {
     SelectFile,
     FileSelected(Option<PathBuf>),
-    SourceLoaded(Result<LoadedData, String>),
+    SourceLoaded {
+        request: SourceLoadRequest,
+        result: Result<LoadedData, String>,
+    },
     AnimationTick,
     WidgetTick,
     Scroll(mouse::ScrollDelta),
@@ -132,6 +132,7 @@ enum Message {
     PresetClicked(preset::PresetFolder),
     DeletePreset(preset::PresetFolder),
     PresetSourceLoaded {
+        request: SourceLoadRequest,
         result: Result<LoadedData, String>,
         data: preset::PresetData,
         folder: preset::PresetFolder,
@@ -152,27 +153,14 @@ impl CoolCooler {
         let (id, open_task) = window::open(app_window_settings());
 
         let mut app = Self {
-            dark_mode: true,
+            ui: UiState::new(),
             source: SourceState::new(),
             canvas: Canvas::new(),
-            dragging: false,
-            last_cursor: None,
-            selected_category: "Static".to_string(),
-            widget_catalog: widget::catalog(),
-            sysinfo_backend: SysInfoBackend::new(),
-            widget_ctx: WidgetContext::default(),
-            preview: None,
-            current_preset: None,
-            show_save_dialog: false,
-            show_load_dialog: false,
-            save_name_input: String::new(),
-            preset_list: Vec::new(),
-            last_preset_click: None,
-            status_message: String::new(),
+            interaction: CanvasInteraction::new(),
+            widgets: WidgetRuntime::new(),
+            presets: PresetState::new(),
             display: DisplayController::new(),
-            _tray_handle: tray_handle,
-            tray_rx: Arc::new(Mutex::new(tray_rx)),
-            window_id: Some(id),
+            windows: WindowState::new(id, tray_handle, tray_rx),
         };
         app.rebuild_preview();
         preset::cleanup_stale_internal_dirs();
@@ -185,7 +173,7 @@ impl CoolCooler {
     }
 
     fn colors(&self) -> &'static AppColors {
-        if self.dark_mode {
+        if self.ui.dark_mode {
             &DARK
         } else {
             &LIGHT

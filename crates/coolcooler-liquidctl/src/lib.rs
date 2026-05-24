@@ -185,9 +185,11 @@ mod tests {
             path.starts_with(std::env::temp_dir()),
             "temp file should be in system temp dir"
         );
-        assert_eq!(
-            path.file_name().unwrap().to_str().unwrap(),
-            "coolcooler_lcd_frame.png"
-        );
+        assert!(path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("coolcooler_lcd_frame_"));
     }
 }

@@ -1,14 +1,14 @@
 use iced::Task;
 
-use crate::{preset, widget, CoolCooler, Message};
+use crate::{widget, CoolCooler, Message};
 
 impl CoolCooler {
     pub(crate) fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::SelectFile => self.select_file(),
             Message::FileSelected(path) => self.file_selected(path),
-            Message::SourceLoaded(result) => {
-                self.source_loaded(result);
+            Message::SourceLoaded { request, result } => {
+                self.source_loaded(request, result);
                 Task::none()
             }
             Message::AnimationTick => {
@@ -44,7 +44,7 @@ impl CoolCooler {
                 Task::none()
             }
             Message::SelectCategory(cat) => {
-                self.selected_category = cat;
+                self.widgets.select_category(cat);
                 Task::none()
             }
             Message::AddWidget(catalog_idx) => self.add_widget(catalog_idx),
@@ -80,20 +80,19 @@ impl CoolCooler {
                 Task::none()
             }
             Message::ShowLoadDialog => {
-                self.preset_list = preset::list();
-                self.show_load_dialog = true;
+                self.presets.open_load_dialog();
                 Task::none()
             }
             Message::CloseSaveDialog => {
-                self.show_save_dialog = false;
+                self.presets.show_save_dialog = false;
                 Task::none()
             }
             Message::CloseLoadDialog => {
-                self.show_load_dialog = false;
+                self.presets.show_load_dialog = false;
                 Task::none()
             }
             Message::SaveNameChanged(name) => {
-                self.save_name_input = name;
+                self.presets.save_name_input = name;
                 Task::none()
             }
             Message::SavePreset => {
@@ -101,20 +100,21 @@ impl CoolCooler {
                 Task::none()
             }
             Message::SavePresetAs => {
-                self.save_name_input.clear();
-                self.show_save_dialog = true;
+                self.presets.save_name_input.clear();
+                self.presets.show_save_dialog = true;
                 Task::none()
             }
             Message::LoadLastPreset(folder) => self.load_preset_folder(folder, true),
             Message::PresetClicked(folder) => self.preset_clicked(folder),
             Message::PresetSourceLoaded {
+                request,
                 result,
                 data,
                 folder,
                 background_path,
                 silent,
             } => {
-                self.preset_source_loaded(result, data, folder, background_path, silent);
+                self.preset_source_loaded(request, result, data, folder, background_path, silent);
                 Task::none()
             }
             Message::DeletePreset(folder) => {
@@ -122,7 +122,7 @@ impl CoolCooler {
                 Task::none()
             }
             Message::ToggleTheme => {
-                self.dark_mode = !self.dark_mode;
+                self.ui.dark_mode = !self.ui.dark_mode;
                 Task::none()
             }
             Message::TrayPoll => self.tray_poll(),
@@ -131,9 +131,7 @@ impl CoolCooler {
                 Task::none()
             }
             Message::WindowClosed(id) => {
-                if self.window_id == Some(id) {
-                    self.window_id = None;
-                }
+                self.window_closed(id);
                 Task::none()
             }
             Message::Quit => self.quit(),

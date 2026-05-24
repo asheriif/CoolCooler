@@ -1,9 +1,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
 use coolcooler_core::{DeviceInfo, Resolution};
-use coolcooler_driver::{DisplayCapability, DisplayDriver, DisplayFrame, DisplayFrameEncoder};
+use coolcooler_driver::{
+    DisplayCapability, DisplayDriver, DisplayFrame, DisplayFrameEncoder, DisplayLoopEvent,
+};
 use image::RgbaImage;
 
 pub(crate) struct DisplayController {
@@ -27,6 +29,7 @@ type SessionHandle = Box<dyn DisplaySessionHandle>;
 trait DisplaySessionHandle: Send {
     fn submit_frame(&self, frame: DisplayFrame);
     fn request_stop(&self);
+    fn drain_events(&mut self) -> Vec<DisplayLoopEvent>;
     fn join_if_finished(&mut self) -> bool;
 }
 
@@ -42,6 +45,15 @@ pub(crate) enum DisplayStatus {
         info: DeviceInfo,
         capability: DisplayCapability,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DisplayNotice {
+    Started(String),
+    Reconnecting(String),
+    TransferFailed(String),
+    Failed(String),
+    Stopped,
 }
 
 impl DisplayStatus {
@@ -105,8 +117,11 @@ impl DisplayController {
         self.status.capability()
     }
 
-    pub(crate) fn restart(&mut self, composited: &RgbaImage) {
-        let Some(pending_start) = self.detect_pending_start(composited) else {
+    pub(crate) fn restart_with<F>(&mut self, render: F)
+    where
+        F: FnOnce(Resolution) -> RgbaImage,
+    {
+        let Some(pending_start) = self.detect_pending_start(render) else {
             self.stop();
             return;
         };
@@ -165,7 +180,16 @@ impl DisplayController {
         }
     }
 
-    pub(crate) fn join_finished(&mut self) {
+    pub(crate) fn poll_lifecycle(&mut self) -> Vec<DisplayNotice> {
+        let events = self.drain_session_events();
+        self.join_finished();
+        events
+            .into_iter()
+            .map(|event| self.notice_for(event))
+            .collect()
+    }
+
+    fn join_finished(&mut self) {
         match std::mem::replace(&mut self.state, DisplayState::Idle) {
             DisplayState::Running(mut session) => {
                 if session.join_if_finished() {
@@ -218,22 +242,51 @@ impl DisplayController {
             .unwrap_or_else(DisplayStatus::disconnected);
     }
 
-    fn detect_pending_start(&mut self, composited: &RgbaImage) -> Option<PendingStart> {
+    fn detect_pending_start<F>(&mut self, render: F) -> Option<PendingStart>
+    where
+        F: FnOnce(Resolution) -> RgbaImage,
+    {
         let Some(driver) = coolcooler_driver::detect_device() else {
             self.status = DisplayStatus::disconnected();
             return None;
         };
         self.status = DisplayStatus::from_driver(&driver);
+        let composited = render(driver.info().resolution);
         let frame = DisplayFrameEncoder::from_driver(&driver)
-            .prepare(composited)
+            .prepare(&composited)
             .ok()?;
         Some(PendingStart { driver, frame })
+    }
+
+    fn drain_session_events(&mut self) -> Vec<DisplayLoopEvent> {
+        match &mut self.state {
+            DisplayState::Running(session) => session.drain_events(),
+            DisplayState::Stopping { session, .. } => session.drain_events(),
+            DisplayState::Idle => Vec::new(),
+        }
+    }
+
+    fn notice_for(&self, event: DisplayLoopEvent) -> DisplayNotice {
+        match event {
+            DisplayLoopEvent::Started => {
+                let name = self
+                    .device_info()
+                    .map(|info| info.name.clone())
+                    .unwrap_or_else(|| "display".to_string());
+                DisplayNotice::Started(name)
+            }
+            DisplayLoopEvent::Reconnecting(message) => DisplayNotice::Reconnecting(message),
+            DisplayLoopEvent::TransferFailed(message) => DisplayNotice::TransferFailed(message),
+            DisplayLoopEvent::Failed(message) => DisplayNotice::Failed(message),
+            DisplayLoopEvent::Stopped => DisplayNotice::Stopped,
+        }
     }
 }
 
 pub(crate) struct DisplaySession {
     stop: Arc<AtomicBool>,
     shared_frame: Arc<Mutex<DisplayFrame>>,
+    event_rx: mpsc::Receiver<DisplayLoopEvent>,
     join: Option<thread::JoinHandle<()>>,
 }
 
@@ -241,15 +294,24 @@ impl DisplaySession {
     pub(crate) fn start(driver: DisplayDriver, initial_frame: DisplayFrame) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let shared_frame = Arc::new(Mutex::new(initial_frame));
+        let (event_tx, event_rx) = mpsc::channel();
         let thread_frame = Arc::clone(&shared_frame);
         let thread_stop = Arc::clone(&stop);
         let join = thread::spawn(move || {
-            coolcooler_driver::run_display(driver, thread_frame, &thread_stop);
+            coolcooler_driver::run_display_with_events(
+                driver,
+                thread_frame,
+                &thread_stop,
+                |event| {
+                    let _ = event_tx.send(event);
+                },
+            );
         });
 
         Self {
             stop,
             shared_frame,
+            event_rx,
             join: Some(join),
         }
     }
@@ -278,6 +340,14 @@ impl DisplaySession {
         true
     }
 
+    fn drain_events(&mut self) -> Vec<DisplayLoopEvent> {
+        let mut events = Vec::new();
+        while let Ok(event) = self.event_rx.try_recv() {
+            events.push(event);
+        }
+        events
+    }
+
     fn join_in_background(&mut self) {
         if let Some(join) = self.join.take() {
             let _ = thread::spawn(move || {
@@ -294,6 +364,10 @@ impl DisplaySessionHandle for DisplaySession {
 
     fn request_stop(&self) {
         Self::request_stop(self);
+    }
+
+    fn drain_events(&mut self) -> Vec<DisplayLoopEvent> {
+        Self::drain_events(self)
     }
 
     fn join_if_finished(&mut self) -> bool {
@@ -338,6 +412,10 @@ mod tests {
 
         fn request_stop(&self) {
             self.stop_requests.fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn drain_events(&mut self) -> Vec<DisplayLoopEvent> {
+            Vec::new()
         }
 
         fn join_if_finished(&mut self) -> bool {

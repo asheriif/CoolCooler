@@ -5,7 +5,67 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{fonts, TextWidgetConfig, WidgetControl, WidgetEdit};
+use super::{fonts, TextWidgetConfig, WidgetControl, WidgetDescriptor, WidgetEdit};
+
+#[derive(Debug)]
+pub(super) struct TextWidgetCore {
+    descriptor: &'static WidgetDescriptor,
+    text: TextState,
+    scale_factor: f32,
+    allow_text_edit: bool,
+    dynamic: bool,
+}
+
+impl TextWidgetCore {
+    pub(super) fn new(
+        descriptor: &'static WidgetDescriptor,
+        initial_text: impl Into<String>,
+        color: [u8; 4],
+        scale_factor: f32,
+        allow_text_edit: bool,
+        dynamic: bool,
+    ) -> Self {
+        Self {
+            descriptor,
+            text: TextState::new(initial_text, color),
+            scale_factor,
+            allow_text_edit,
+            dynamic,
+        }
+    }
+
+    pub(super) fn descriptor(&self) -> &WidgetDescriptor {
+        self.descriptor
+    }
+
+    pub(super) fn render(&self, width: u32, height: u32) -> RgbaImage {
+        self.text.render(width, height, self.scale_factor)
+    }
+
+    pub(super) fn is_dynamic(&self) -> bool {
+        self.dynamic
+    }
+
+    pub(super) fn preset_config(&self) -> Value {
+        self.text.config_value(self.allow_text_edit)
+    }
+
+    pub(super) fn controls(&self) -> Vec<WidgetControl<'_>> {
+        self.text.controls(self.allow_text_edit)
+    }
+
+    pub(super) fn apply_preset_config(&mut self, config: &Value) -> Result<(), &'static str> {
+        self.text.apply_preset_config(config, self.allow_text_edit)
+    }
+
+    pub(super) fn apply_edit(&mut self, edit: WidgetEdit) {
+        self.text.apply_edit(edit, self.allow_text_edit);
+    }
+
+    pub(super) fn set_text(&mut self, text: String) -> bool {
+        self.text.set_text(text)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(super) struct TextState {

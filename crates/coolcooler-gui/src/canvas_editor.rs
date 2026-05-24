@@ -5,8 +5,64 @@ use image::{Rgba, RgbaImage};
 use crate::canvas::LayerSelection;
 use crate::composition::{CanvasPolicy, SourceKind};
 use crate::rendering::{circular_preview_from_rgba, render_base_rgba};
+use crate::source::SourceState;
+use crate::widget::WidgetContext;
 use crate::widget::WidgetEdit;
 use crate::{CoolCooler, Message};
+
+pub(crate) struct CanvasInteraction {
+    dragging: bool,
+    last_cursor: Option<Point>,
+}
+
+impl CanvasInteraction {
+    pub(crate) fn new() -> Self {
+        Self {
+            dragging: false,
+            last_cursor: None,
+        }
+    }
+
+    pub(crate) fn is_dragging(&self) -> bool {
+        self.dragging
+    }
+
+    fn start_drag(&mut self) {
+        self.dragging = true;
+        self.last_cursor = None;
+    }
+
+    fn drag_delta(&mut self, pos: Point) -> Option<(f32, f32)> {
+        if !self.dragging {
+            return None;
+        }
+        let delta = self
+            .last_cursor
+            .map(|last| (pos.x - last.x, pos.y - last.y));
+        self.last_cursor = Some(pos);
+        delta
+    }
+
+    fn end_drag(&mut self) {
+        self.dragging = false;
+        self.last_cursor = None;
+    }
+}
+
+pub(crate) fn render_composited(
+    source: &SourceState,
+    canvas: &crate::canvas::Canvas,
+    widget_ctx: &WidgetContext,
+    resolution: Resolution,
+) -> RgbaImage {
+    let base = if let Some(src) = source.current_frame() {
+        let vp = canvas.base_viewport();
+        render_base_rgba(&src.rgba, resolution, vp.zoom, vp.pan)
+    } else {
+        RgbaImage::from_pixel(resolution.width, resolution.height, Rgba([0, 0, 0, 255]))
+    };
+    canvas.composite(base, widget_ctx)
+}
 
 impl CoolCooler {
     pub(crate) fn source_kind(&self) -> SourceKind {
@@ -25,26 +81,28 @@ impl CoolCooler {
         self.display.resolution()
     }
 
+    pub(crate) fn render_composited_at(&self, resolution: Resolution) -> RgbaImage {
+        render_composited(
+            &self.source,
+            &self.canvas,
+            self.widgets.context(),
+            resolution,
+        )
+    }
+
     pub(crate) fn render_composited(&self) -> RgbaImage {
-        let resolution = self.lcd_resolution();
-        let base = if let Some(src) = self.source.current_frame() {
-            let vp = self.canvas.base_viewport();
-            render_base_rgba(&src.rgba, resolution, vp.zoom, vp.pan)
-        } else {
-            RgbaImage::from_pixel(resolution.width, resolution.height, Rgba([0, 0, 0, 255]))
-        };
-        self.canvas.composite(base, &self.widget_ctx)
+        self.render_composited_at(self.lcd_resolution())
     }
 
     pub(crate) fn rebuild_preview(&mut self) {
         let composited = self.render_composited();
-        self.preview = Some(circular_preview_from_rgba(composited));
+        self.ui.preview = Some(circular_preview_from_rgba(composited));
     }
 
     pub(crate) fn commit_frame(&mut self) {
         let composited = self.render_composited();
         self.display.submit_frame(&composited);
-        self.preview = Some(circular_preview_from_rgba(composited));
+        self.ui.preview = Some(circular_preview_from_rgba(composited));
     }
 
     pub(crate) fn edit_active_widget(&mut self, edit: WidgetEdit) {
@@ -54,13 +112,10 @@ impl CoolCooler {
     }
 
     pub(crate) fn widget_tick(&mut self) {
-        let has_sysinfo_widgets = self.canvas.has_widgets_in_category("System Metrics");
-        if has_sysinfo_widgets {
-            self.sysinfo_backend.refresh();
-            self.widget_ctx.sysinfo = self.sysinfo_backend.data().clone();
-        }
+        self.widgets
+            .refresh_if_needed(self.canvas.has_widgets_in_category("System Metrics"));
 
-        if self.canvas.tick_widgets(&self.widget_ctx) {
+        if self.canvas.tick_widgets(self.widgets.context()) {
             self.commit_frame();
         }
     }
@@ -81,30 +136,23 @@ impl CoolCooler {
     }
 
     pub(crate) fn start_drag(&mut self) {
-        self.dragging = true;
-        self.last_cursor = None;
+        self.interaction.start_drag();
     }
 
     pub(crate) fn drag_canvas(&mut self, pos: Point) {
-        if self.dragging {
-            if let Some(last) = self.last_cursor {
-                let dx = pos.x - last.x;
-                let dy = pos.y - last.y;
-                if self.canvas.drag_active_layer(
-                    (dx, dy),
-                    self.lcd_resolution(),
-                    self.current_source_size(),
-                ) {
-                    self.commit_frame();
-                }
+        if let Some(delta) = self.interaction.drag_delta(pos) {
+            if self.canvas.drag_active_layer(
+                delta,
+                self.lcd_resolution(),
+                self.current_source_size(),
+            ) {
+                self.commit_frame();
             }
-            self.last_cursor = Some(pos);
         }
     }
 
     pub(crate) fn end_drag(&mut self) {
-        self.dragging = false;
-        self.last_cursor = None;
+        self.interaction.end_drag();
     }
 
     pub(crate) fn reset_active_layer(&mut self) {
@@ -117,7 +165,7 @@ impl CoolCooler {
         if !self.canvas_policy().widgets_allowed() {
             return Task::none();
         }
-        if let Some(spec) = self.widget_catalog.get(catalog_idx) {
+        if let Some(spec) = self.widgets.catalog().get(catalog_idx) {
             let id = self.canvas.add_widget(spec, self.lcd_resolution());
             self.canvas.select_layer(LayerSelection::Widget(id));
             self.commit_frame();

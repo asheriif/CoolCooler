@@ -12,11 +12,11 @@ use crate::{widget, CoolCooler, LayerOption, Message};
 pub(crate) fn view(app: &CoolCooler, _window_id: window::Id) -> Element<'_, Message> {
     let c = app.colors();
 
-    if app.show_save_dialog {
+    if app.presets.show_save_dialog {
         return save_dialog(app, c);
     }
 
-    if app.show_load_dialog {
+    if app.presets.show_load_dialog {
         return load_dialog(app, c);
     }
 
@@ -37,7 +37,7 @@ fn title_bar<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Element<'a, Message> 
     row![
         text("CoolCooler").size(28).color(c.accent),
         iced::widget::space().width(Length::Fill),
-        iced::widget::toggler(app.dark_mode)
+        iced::widget::toggler(app.ui.dark_mode)
             .label("Dark")
             .on_toggle(|_| Message::ToggleTheme)
             .size(16)
@@ -58,7 +58,7 @@ fn left_panel<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Element<'a, Message>
     }
 
     panel
-        .push(text(&app.status_message).size(12).color(c.text_dim))
+        .push(text(&app.ui.status_message).size(12).color(c.text_dim))
         .push(iced::widget::space().height(Length::Fill))
         .push(select_image_button(app, c))
         .push(preset_buttons(app, c))
@@ -113,7 +113,7 @@ fn preview_card<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Element<'a, Messag
 
 fn preview_canvas(app: &CoolCooler) -> Element<'_, Message> {
     let resolution = app.lcd_resolution();
-    let handle = app.preview.clone().unwrap_or_else(|| {
+    let handle = app.ui.preview.clone().unwrap_or_else(|| {
         circular_preview_from_rgba(RgbaImage::from_pixel(
             resolution.width,
             resolution.height,
@@ -121,7 +121,7 @@ fn preview_canvas(app: &CoolCooler) -> Element<'_, Message> {
         ))
     });
     let is_widget_selected = app.canvas.active_widget_layer().is_some();
-    let cursor_style = if app.dragging {
+    let cursor_style = if app.interaction.is_dragging() {
         mouse::Interaction::Grabbing
     } else if is_widget_selected {
         mouse::Interaction::Move
@@ -363,7 +363,7 @@ fn select_image_button<'a>(app: &CoolCooler, c: &'a AppColors) -> button::Button
 }
 
 fn preset_buttons<'a>(app: &CoolCooler, c: &'a AppColors) -> Element<'a, Message> {
-    let save_label = if app.current_preset.is_some() {
+    let save_label = if app.presets.has_current() {
         "Save"
     } else {
         "Save Preset"
@@ -372,7 +372,7 @@ fn preset_buttons<'a>(app: &CoolCooler, c: &'a AppColors) -> Element<'a, Message
         styled_button(save_label, ButtonKind::Default, c).on_press(Message::ShowSaveDialog);
     let mut buttons = row![save_btn].spacing(8);
 
-    if app.current_preset.is_some() {
+    if app.presets.has_current() {
         buttons = buttons
             .push(styled_button("Save As", ButtonKind::Default, c).on_press(Message::SavePresetAs));
     }
@@ -400,13 +400,13 @@ fn widget_catalog_panel<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Element<'a
         .into();
     }
 
-    let categories: Vec<String> = widget::categories(app.widget_catalog)
+    let categories: Vec<String> = widget::categories(app.widgets.catalog())
         .into_iter()
         .map(|s| s.to_string())
         .collect();
     let category_picker = pick_list(
         categories,
-        Some(app.selected_category.clone()),
+        Some(app.widgets.selected_category().to_string()),
         Message::SelectCategory,
     )
     .width(Length::Fill)
@@ -428,9 +428,9 @@ fn widget_catalog_panel<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Element<'a
 
 fn catalog_items<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Element<'a, Message> {
     let mut items = column![].spacing(6);
-    for (i, spec) in app.widget_catalog.iter().enumerate() {
+    for (i, spec) in app.widgets.catalog().iter().enumerate() {
         let desc = spec.descriptor;
-        if desc.category != app.selected_category {
+        if desc.category != app.widgets.selected_category() {
             continue;
         }
         items = items.push(
@@ -456,7 +456,7 @@ fn save_dialog<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Element<'a, Message
     container(card(
         column![
             text("Save Preset").size(22).color(c.text_primary),
-            text_input("Preset name...", &app.save_name_input)
+            text_input("Preset name...", &app.presets.save_name_input)
                 .on_input(Message::SaveNameChanged)
                 .on_submit(Message::SavePreset)
                 .size(14)
@@ -496,7 +496,7 @@ fn load_dialog<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Element<'a, Message
 }
 
 fn preset_grid<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Element<'a, Message> {
-    if app.preset_list.is_empty() {
+    if app.presets.list.is_empty() {
         return column![container(
             text("No presets saved yet")
                 .size(14)
@@ -511,14 +511,14 @@ fn preset_grid<'a>(app: &'a CoolCooler, c: &'a AppColors) -> Element<'a, Message
 
     let mut grid = column![].spacing(12);
     let mut grid_row = row![].spacing(12);
-    for (i, entry) in app.preset_list.iter().enumerate() {
+    for (i, entry) in app.presets.list.iter().enumerate() {
         grid_row = grid_row.push(preset_card(entry, c));
         if (i + 1) % 4 == 0 {
             grid = grid.push(grid_row);
             grid_row = row![].spacing(12);
         }
     }
-    if !app.preset_list.len().is_multiple_of(4) {
+    if !app.presets.list.len().is_multiple_of(4) {
         grid = grid.push(grid_row);
     }
     grid.into()

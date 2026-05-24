@@ -4,7 +4,7 @@ use iced::Task;
 
 use crate::canvas::Viewport;
 use crate::composition::{CanvasPolicy, SourceKind};
-use crate::source::{load_source_data, LoadedData};
+use crate::source::{load_source_data, LoadedData, SourceLoadRequest};
 use crate::windowing::pick_file;
 use crate::{CoolCooler, Message};
 
@@ -18,23 +18,29 @@ impl CoolCooler {
             return Task::none();
         };
 
-        let filename = self.source.begin_loading(path.clone());
+        let request = self.source.begin_loading(path);
+        let task_request = request.clone();
         self.stop_display();
-        self.preview = None;
+        self.ui.preview = None;
         self.canvas.set_base_viewport(Viewport::default());
-        self.status_message = "Loading...".to_string();
+        self.ui.status_message = "Loading...".to_string();
 
         Task::perform(
-            async move { load_source_data(&path, filename) },
-            Message::SourceLoaded,
+            async move { load_source_data(task_request.path(), task_request.filename().to_string()) },
+            move |result| Message::SourceLoaded { request, result },
         )
     }
 
-    pub(crate) fn source_loaded(&mut self, result: Result<LoadedData, String>) {
+    pub(crate) fn source_loaded(
+        &mut self,
+        request: SourceLoadRequest,
+        result: Result<LoadedData, String>,
+    ) {
         match result {
             Ok(data) => {
-                let source_path = self.source.path().map(PathBuf::from);
-                let summary = self.source.replace_with_loaded(data, source_path);
+                let Some(summary) = self.source.complete_loading(&request, data, None) else {
+                    return;
+                };
 
                 let policy = CanvasPolicy::for_content(
                     self.display.capability(),
@@ -49,13 +55,14 @@ impl CoolCooler {
                 } else {
                     String::new()
                 };
-                self.status_message = format!("{}{detail}", summary.filename);
+                self.ui.status_message = format!("{}{detail}", summary.filename);
                 self.rebuild_preview();
                 self.start_display();
             }
             Err(e) => {
-                self.source.set_loading(false);
-                self.status_message = format!("Error: {e}");
+                if self.source.fail_loading(&request) {
+                    self.ui.status_message = format!("Error: {e}");
+                }
             }
         }
     }

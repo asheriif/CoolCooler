@@ -8,7 +8,7 @@ use coolcooler_liquidctl::LiquidctlDriver;
 use image::{DynamicImage, RgbaImage};
 
 pub use detect::{detect_device, match_liquidctl_device};
-pub use display_loop::run_display;
+pub use display_loop::{run_display, run_display_with_events, DisplayLoopEvent};
 
 /// What display update strategy a device supports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

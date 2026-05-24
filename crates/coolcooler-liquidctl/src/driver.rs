@@ -1,10 +1,13 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use coolcooler_core::{DeviceInfo, Error, Result};
 
 use crate::LiquidctlDeviceDef;
+
+static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
 
 /// A display driver that delegates to the `liquidctl` CLI tool.
 pub struct LiquidctlDriver {
@@ -26,7 +29,7 @@ impl LiquidctlDriver {
                 target_fps: 1.0,
                 keepalive_interval: Duration::from_secs(3600),
             },
-            temp_file: std::env::temp_dir().join("coolcooler_lcd_frame.png"),
+            temp_file: unique_temp_file_path(),
         }
     }
 
@@ -91,4 +94,13 @@ pub fn build_liquidctl_args(def: &LiquidctlDeviceDef, path: &str) -> Vec<String>
         .iter()
         .map(|arg| arg.replace("{path}", path))
         .collect()
+}
+
+fn unique_temp_file_path() -> PathBuf {
+    let id = NEXT_TEMP_FILE_ID.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "coolcooler_lcd_frame_{}_{}.png",
+        std::process::id(),
+        id
+    ))
 }

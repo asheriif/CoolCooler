@@ -1,6 +1,6 @@
 use image::RgbaImage;
 
-use super::text::TextState;
+use super::text::TextWidgetCore;
 use super::{LcdWidget, WidgetContext, WidgetControl, WidgetDescriptor, WidgetEdit};
 
 pub const CPU_USAGE_DESCRIPTOR: WidgetDescriptor = WidgetDescriptor {
@@ -43,28 +43,35 @@ macro_rules! sysinfo_text_widget {
     ) => {
         #[derive(Debug)]
         pub struct $name {
-            text: TextState,
+            text: TextWidgetCore,
         }
 
         impl $name {
             pub fn new() -> Self {
                 Self {
-                    text: TextState::new($initial, [$r, $g, $b, $a]),
+                    text: TextWidgetCore::new(
+                        &$descriptor,
+                        $initial,
+                        [$r, $g, $b, $a],
+                        0.65,
+                        false,
+                        true,
+                    ),
                 }
             }
         }
 
         impl LcdWidget for $name {
             fn descriptor(&self) -> &WidgetDescriptor {
-                &$descriptor
+                self.text.descriptor()
             }
 
             fn render(&self, width: u32, height: u32, _ctx: &WidgetContext) -> RgbaImage {
-                self.text.render(width, height, 0.65)
+                self.text.render(width, height)
             }
 
             fn is_dynamic(&self) -> bool {
-                true
+                self.text.is_dynamic()
             }
 
             fn tick(&mut self, $ctx: &WidgetContext) -> bool {
@@ -73,22 +80,22 @@ macro_rules! sysinfo_text_widget {
             }
 
             fn preset_config(&self) -> serde_json::Value {
-                self.text.config_value(false)
+                self.text.preset_config()
             }
 
             fn controls(&self) -> Vec<WidgetControl<'_>> {
-                self.text.controls(false)
+                self.text.controls()
             }
 
             fn apply_preset_config(
                 &mut self,
                 config: &serde_json::Value,
             ) -> Result<(), &'static str> {
-                self.text.apply_preset_config(config, false)
+                self.text.apply_preset_config(config)
             }
 
             fn apply_edit(&mut self, edit: WidgetEdit) {
-                self.text.apply_edit(edit, false);
+                self.text.apply_edit(edit);
             }
         }
     };

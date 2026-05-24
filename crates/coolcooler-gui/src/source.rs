@@ -38,12 +38,31 @@ impl LoadedData {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SourceLoadRequest {
+    id: u64,
+    path: PathBuf,
+    filename: String,
+}
+
+impl SourceLoadRequest {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn filename(&self) -> &str {
+        &self.filename
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct SourceState {
     path: Option<PathBuf>,
     frames: Vec<SourceFrame>,
     filename: String,
     loading: bool,
+    pending_load_id: Option<u64>,
+    next_load_id: u64,
     current_frame: usize,
     last_advance: Instant,
 }
@@ -61,6 +80,8 @@ impl SourceState {
             frames: Vec::new(),
             filename: String::new(),
             loading: false,
+            pending_load_id: None,
+            next_load_id: 0,
             current_frame: 0,
             last_advance: Instant::now(),
         }
@@ -72,10 +93,6 @@ impl SourceState {
 
     pub(crate) fn is_loading(&self) -> bool {
         self.loading
-    }
-
-    pub(crate) fn set_loading(&mut self, loading: bool) {
-        self.loading = loading;
     }
 
     pub(crate) fn frame_count(&self) -> usize {
@@ -95,14 +112,45 @@ impl SourceState {
         self.frames.get(self.current_frame)
     }
 
-    pub(crate) fn begin_loading(&mut self, path: PathBuf) -> String {
-        let filename = filename_for_path(&path);
-        self.path = Some(path);
+    pub(crate) fn begin_loading(&mut self, path: PathBuf) -> SourceLoadRequest {
+        let request = self.next_load_request(path);
+        self.path = Some(request.path.clone());
         self.frames.clear();
-        self.filename = filename.clone();
+        self.filename = request.filename.clone();
         self.loading = true;
+        self.pending_load_id = Some(request.id);
         self.reset_animation();
-        filename
+        request
+    }
+
+    pub(crate) fn begin_background_loading(&mut self, path: PathBuf) -> SourceLoadRequest {
+        let request = self.next_load_request(path);
+        self.loading = true;
+        self.pending_load_id = Some(request.id);
+        request
+    }
+
+    pub(crate) fn complete_loading(
+        &mut self,
+        request: &SourceLoadRequest,
+        data: LoadedData,
+        path: Option<PathBuf>,
+    ) -> Option<SourceSummary> {
+        if !self.is_current_load(request) {
+            return None;
+        }
+        self.pending_load_id = None;
+        let path = path.unwrap_or_else(|| request.path.clone());
+        Some(self.replace_with_loaded(data, Some(path)))
+    }
+
+    pub(crate) fn fail_loading(&mut self, request: &SourceLoadRequest) -> bool {
+        if !self.is_current_load(request) {
+            return false;
+        }
+        self.loading = false;
+        self.pending_load_id = None;
+        true
     }
 
     pub(crate) fn replace_with_loaded(
@@ -116,6 +164,7 @@ impl SourceState {
         self.frames = frames;
         self.filename = filename.clone();
         self.loading = false;
+        self.pending_load_id = None;
         self.reset_animation();
         SourceSummary {
             filename,
@@ -128,6 +177,7 @@ impl SourceState {
         self.frames.clear();
         self.filename.clear();
         self.loading = false;
+        self.pending_load_id = None;
         self.reset_animation();
     }
 
@@ -149,6 +199,20 @@ impl SourceState {
     fn reset_animation(&mut self) {
         self.current_frame = 0;
         self.last_advance = Instant::now();
+    }
+
+    fn next_load_request(&mut self, path: PathBuf) -> SourceLoadRequest {
+        let id = self.next_load_id;
+        self.next_load_id = self.next_load_id.wrapping_add(1);
+        SourceLoadRequest {
+            id,
+            filename: filename_for_path(&path),
+            path,
+        }
+    }
+
+    fn is_current_load(&self, request: &SourceLoadRequest) -> bool {
+        self.pending_load_id == Some(request.id)
     }
 }
 
@@ -250,5 +314,23 @@ mod tests {
         assert_eq!(summary.frame_count, 1);
         assert_eq!(source.path(), Some(Path::new("/tmp/demo.png")));
         assert_eq!(source.current_size(), Some((4, 4)));
+    }
+
+    #[test]
+    fn stale_load_completion_is_ignored() {
+        let mut source = SourceState::new();
+        let first = source.begin_loading(PathBuf::from("/tmp/first.png"));
+        let second = source.begin_loading(PathBuf::from("/tmp/second.png"));
+
+        assert!(source
+            .complete_loading(&first, loaded_data("first.png"), None)
+            .is_none());
+
+        let summary = source
+            .complete_loading(&second, loaded_data("second.png"), None)
+            .expect("latest load should apply");
+
+        assert_eq!(summary.filename, "second.png");
+        assert_eq!(source.path(), Some(Path::new("/tmp/second.png")));
     }
 }

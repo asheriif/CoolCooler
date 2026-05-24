@@ -1,11 +1,63 @@
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use iced::Task;
 
 use crate::canvas::Viewport;
-use crate::source::{filename_for_path, load_source_data, LoadedData};
-use crate::{preset, widget, CoolCooler, CurrentPreset, Message};
+use crate::source::{load_source_data, LoadedData, SourceLoadRequest};
+use crate::{preset, widget, CoolCooler, Message};
+
+#[derive(Debug, Clone)]
+pub(crate) struct CurrentPreset {
+    pub(crate) folder: preset::PresetFolder,
+    pub(crate) name: String,
+}
+
+pub(crate) struct PresetState {
+    pub(crate) current: Option<CurrentPreset>,
+    pub(crate) show_save_dialog: bool,
+    pub(crate) show_load_dialog: bool,
+    pub(crate) save_name_input: String,
+    pub(crate) list: Vec<preset::PresetEntry>,
+    last_click: Option<(preset::PresetFolder, Instant)>,
+}
+
+impl PresetState {
+    pub(crate) fn new() -> Self {
+        Self {
+            current: None,
+            show_save_dialog: false,
+            show_load_dialog: false,
+            save_name_input: String::new(),
+            list: Vec::new(),
+            last_click: None,
+        }
+    }
+
+    pub(crate) fn has_current(&self) -> bool {
+        self.current.is_some()
+    }
+
+    pub(crate) fn open_load_dialog(&mut self) {
+        self.list = preset::list();
+        self.show_load_dialog = true;
+    }
+
+    pub(crate) fn register_click(&mut self, folder: preset::PresetFolder) -> bool {
+        let is_double = self
+            .last_click
+            .as_ref()
+            .map(|(f, t)| f == &folder && t.elapsed() < Duration::from_millis(400))
+            .unwrap_or(false);
+
+        if is_double {
+            self.last_click = None;
+        } else {
+            self.last_click = Some((folder, Instant::now()));
+        }
+
+        is_double
+    }
+}
 
 impl CoolCooler {
     pub(crate) fn build_preset_data(&self, name: &str) -> preset::PresetData {
@@ -80,7 +132,7 @@ impl CoolCooler {
             Ok(loaded) => loaded,
             Err(e) => {
                 if !silent {
-                    self.status_message = format!("Load failed: {e}");
+                    self.ui.status_message = format!("Load failed: {e}");
                 }
                 return Task::none();
             }
@@ -89,22 +141,24 @@ impl CoolCooler {
         if let Some(path) = background_path {
             if !path.exists() {
                 if !silent {
-                    self.status_message = "Load failed: background file missing".to_string();
+                    self.ui.status_message = "Load failed: background file missing".to_string();
                 }
                 return Task::none();
             }
 
-            let filename = filename_for_path(&path);
-            let path_clone = path.clone();
+            let request = self.source.begin_background_loading(path.clone());
+            let task_request = request.clone();
 
-            self.source.set_loading(true);
             if !silent {
-                self.status_message = "Loading preset...".to_string();
+                self.ui.status_message = "Loading preset...".to_string();
             }
 
             return Task::perform(
-                async move { load_source_data(&path_clone, filename) },
+                async move {
+                    load_source_data(task_request.path(), task_request.filename().to_string())
+                },
                 move |result| Message::PresetSourceLoaded {
+                    request,
                     result,
                     data,
                     folder,
@@ -114,7 +168,8 @@ impl CoolCooler {
             );
         }
 
-        self.apply_loaded_preset(folder, data, None, None, silent);
+        self.source.clear();
+        self.apply_loaded_preset(folder, data, silent);
         Task::none()
     }
 
@@ -122,19 +177,11 @@ impl CoolCooler {
         &mut self,
         folder: preset::PresetFolder,
         data: preset::PresetData,
-        loaded_source: Option<LoadedData>,
-        background_path: Option<PathBuf>,
         silent: bool,
     ) {
         let name = data.name.clone();
 
-        if let Some(loaded) = loaded_source {
-            self.source.replace_with_loaded(loaded, background_path);
-        } else {
-            self.source.clear();
-        }
-
-        self.current_preset = Some(CurrentPreset {
+        self.presets.current = Some(CurrentPreset {
             folder: folder.clone(),
             name: name.clone(),
         });
@@ -142,8 +189,8 @@ impl CoolCooler {
         self.start_display();
         preset::remember_last_used(&folder);
 
-        if !silent || self.status_message.is_empty() {
-            self.status_message = if skipped_widgets == 0 {
+        if !silent || self.ui.status_message.is_empty() {
+            self.ui.status_message = if skipped_widgets == 0 {
                 format!("Loaded preset '{name}'")
             } else {
                 format!("Loaded preset '{name}' ({skipped_widgets} incompatible widget(s) skipped)")
@@ -152,7 +199,7 @@ impl CoolCooler {
     }
 
     pub(crate) fn save_requested(&mut self) {
-        if let Some(current) = self.current_preset.clone() {
+        if let Some(current) = self.presets.current.clone() {
             let name = current.name;
             let data = self.build_preset_data(&name);
             let composited = self.render_composited();
@@ -164,25 +211,25 @@ impl CoolCooler {
                 &data,
             ) {
                 Ok(folder) => {
-                    self.current_preset = Some(CurrentPreset {
+                    self.presets.current = Some(CurrentPreset {
                         folder: folder.clone(),
                         name: name.clone(),
                     });
                     preset::remember_last_used(&folder);
-                    self.status_message = format!("Preset '{name}' saved");
+                    self.ui.status_message = format!("Preset '{name}' saved");
                 }
-                Err(e) => self.status_message = format!("Save failed: {e}"),
+                Err(e) => self.ui.status_message = format!("Save failed: {e}"),
             }
         } else {
-            self.save_name_input.clear();
-            self.show_save_dialog = true;
+            self.presets.save_name_input.clear();
+            self.presets.show_save_dialog = true;
         }
     }
 
     pub(crate) fn save_preset(&mut self) {
-        let name = self.save_name_input.trim().to_string();
+        let name = self.presets.save_name_input.trim().to_string();
         if let Err(e) = preset::validate_name(&name) {
-            self.status_message = e.to_string();
+            self.ui.status_message = e.to_string();
             return;
         }
 
@@ -191,50 +238,48 @@ impl CoolCooler {
         match preset::save(&name, None, self.source.path(), &composited, &data) {
             Ok(folder) => {
                 preset::remember_last_used(&folder);
-                self.current_preset = Some(CurrentPreset {
+                self.presets.current = Some(CurrentPreset {
                     folder,
                     name: name.clone(),
                 });
-                self.show_save_dialog = false;
-                self.status_message = format!("Preset '{name}' saved");
+                self.presets.show_save_dialog = false;
+                self.ui.status_message = format!("Preset '{name}' saved");
             }
-            Err(e) => self.status_message = format!("Save failed: {e}"),
+            Err(e) => self.ui.status_message = format!("Save failed: {e}"),
         }
     }
 
     pub(crate) fn preset_clicked(&mut self, folder: preset::PresetFolder) -> Task<Message> {
-        let is_double = self
-            .last_preset_click
-            .as_ref()
-            .map(|(f, t)| f == &folder && t.elapsed() < Duration::from_millis(400))
-            .unwrap_or(false);
-
-        if !is_double {
-            self.last_preset_click = Some((folder, Instant::now()));
+        if !self.presets.register_click(folder.clone()) {
             return Task::none();
         }
 
-        self.last_preset_click = None;
-        self.show_load_dialog = false;
+        self.presets.show_load_dialog = false;
         self.load_preset_folder(folder, false)
     }
 
     pub(crate) fn preset_source_loaded(
         &mut self,
+        request: SourceLoadRequest,
         result: Result<LoadedData, String>,
         data: preset::PresetData,
         folder: preset::PresetFolder,
-        background_path: Option<PathBuf>,
+        background_path: Option<std::path::PathBuf>,
         silent: bool,
     ) {
-        self.source.set_loading(false);
         match result {
             Ok(loaded) => {
-                self.apply_loaded_preset(folder, data, Some(loaded), background_path, silent);
+                if self
+                    .source
+                    .complete_loading(&request, loaded, background_path)
+                    .is_some()
+                {
+                    self.apply_loaded_preset(folder, data, silent);
+                }
             }
             Err(e) => {
-                if !silent {
-                    self.status_message = format!("Load failed: {e}");
+                if self.source.fail_loading(&request) && !silent {
+                    self.ui.status_message = format!("Load failed: {e}");
                 }
             }
         }
@@ -242,18 +287,19 @@ impl CoolCooler {
 
     pub(crate) fn delete_preset(&mut self, folder: preset::PresetFolder) {
         if let Err(e) = preset::delete(&folder) {
-            self.status_message = format!("Delete failed: {e}");
+            self.ui.status_message = format!("Delete failed: {e}");
             return;
         }
 
         preset::forget_last_used_if(&folder);
-        self.preset_list = preset::list();
+        self.presets.list = preset::list();
         if self
-            .current_preset
+            .presets
+            .current
             .as_ref()
             .is_some_and(|current| current.folder == folder)
         {
-            self.current_preset = None;
+            self.presets.current = None;
             self.source.clear();
             self.commit_frame();
         }
