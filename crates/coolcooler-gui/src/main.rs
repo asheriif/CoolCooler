@@ -2,7 +2,7 @@ mod canvas;
 mod canvas_editor;
 mod composition;
 mod display_flow;
-mod display_session;
+mod display_worker;
 mod preset;
 mod preset_flow;
 mod rendering;
@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use canvas::{Canvas, LayerSelection};
 use canvas_editor::CanvasInteraction;
-use display_session::DisplayController;
+use display_worker::DisplayController;
 use iced::widget::image::Handle;
 use iced::{mouse, window, Color, Element, Point, Subscription, Task, Theme};
 use preset_flow::PresetState;
@@ -139,7 +139,7 @@ enum Message {
     ToggleTheme,
     WindowClosed(window::Id),
     TrayPoll,
-    DisplaySessionPoll,
+    DisplayWorkerPoll,
     Quit,
 }
 
@@ -222,7 +222,7 @@ impl CoolCooler {
 
         if self.display.needs_lifecycle_poll() {
             subs.push(
-                iced::time::every(Duration::from_millis(100)).map(|_| Message::DisplaySessionPoll),
+                iced::time::every(Duration::from_millis(100)).map(|_| Message::DisplayWorkerPoll),
             );
         }
 

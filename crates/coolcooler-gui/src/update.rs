@@ -123,8 +123,8 @@ impl CoolCooler {
                 Task::none()
             }
             Message::TrayPoll => self.tray_poll(),
-            Message::DisplaySessionPoll => {
-                self.reap_display_session();
+            Message::DisplayWorkerPoll => {
+                self.poll_display_worker();
                 Task::none()
             }
             Message::WindowClosed(id) => {

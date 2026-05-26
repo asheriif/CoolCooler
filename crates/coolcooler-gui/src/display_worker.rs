@@ -17,25 +17,32 @@ const FALLBACK_PREVIEW_RESOLUTION: Resolution = Resolution::new(240, 240);
 
 enum DisplayState {
     Idle,
-    Running(SessionHandle),
+    Running(WorkerHandle),
     Stopping {
-        session: SessionHandle,
-        pending_restart: Option<PendingStart>,
+        worker: WorkerHandle,
+        queued_start: Option<WorkerStart>,
     },
 }
 
-type SessionHandle = Box<dyn DisplaySessionHandle>;
+type WorkerHandle = Box<dyn DisplayWorkerHandle>;
 
-trait DisplaySessionHandle: Send {
+trait DisplayWorkerHandle: Send {
     fn submit_frame(&self, frame: DisplayFrame);
     fn request_stop(&self);
     fn drain_events(&mut self) -> Vec<DisplayLoopEvent>;
     fn join_if_finished(&mut self) -> bool;
 }
 
-struct PendingStart {
-    driver: DisplayDriver,
-    frame: DisplayFrame,
+enum WorkerStart {
+    Detected {
+        driver: DisplayDriver,
+        frame: DisplayFrame,
+    },
+    Reopen {
+        info: DeviceInfo,
+        capability: DisplayCapability,
+        frame: DisplayFrame,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -117,33 +124,46 @@ impl DisplayController {
         self.status.capability()
     }
 
-    pub(crate) fn restart_with<F>(&mut self, render: F)
+    pub(crate) fn present_with<F>(&mut self, render: F)
     where
         F: FnOnce(Resolution) -> RgbaImage,
     {
-        let Some(pending_start) = self.detect_pending_start(render) else {
+        if matches!(self.state, DisplayState::Running(_)) {
+            match self.prepare_frame_from_status(render) {
+                Some(frame) => {
+                    if let DisplayState::Running(worker) = &self.state {
+                        worker.submit_frame(frame);
+                    }
+                }
+                None => self.stop(),
+            }
+            return;
+        }
+
+        if matches!(self.state, DisplayState::Stopping { .. }) {
+            match self.prepare_reopen_from_status(render) {
+                Some(worker_start) => self.replace_queued_start(worker_start),
+                None => self.stop(),
+            }
+            return;
+        }
+
+        let Some(worker_start) = self.detect_worker_start(render) else {
             self.stop();
             return;
         };
-        self.restart_pending(pending_start);
+        self.start(worker_start);
     }
 
-    fn restart_pending(&mut self, pending_start: PendingStart) {
+    fn replace_queued_start(&mut self, worker_start: WorkerStart) {
         match std::mem::replace(&mut self.state, DisplayState::Idle) {
-            DisplayState::Idle => self.start(pending_start),
-            DisplayState::Running(session) => {
-                session.request_stop();
+            DisplayState::Stopping { worker, .. } => {
                 self.state = DisplayState::Stopping {
-                    session,
-                    pending_restart: Some(pending_start),
+                    worker,
+                    queued_start: Some(worker_start),
                 };
             }
-            DisplayState::Stopping { session, .. } => {
-                self.state = DisplayState::Stopping {
-                    session,
-                    pending_restart: Some(pending_start),
-                };
-            }
+            state => self.state = state,
         }
     }
 
@@ -152,36 +172,36 @@ impl DisplayController {
             DisplayState::Idle => {
                 self.state = DisplayState::Idle;
             }
-            DisplayState::Running(session) => {
-                session.request_stop();
+            DisplayState::Running(worker) => {
+                worker.request_stop();
                 self.state = DisplayState::Stopping {
-                    session,
-                    pending_restart: None,
+                    worker,
+                    queued_start: None,
                 };
             }
-            DisplayState::Stopping { session, .. } => {
+            DisplayState::Stopping { worker, .. } => {
                 self.state = DisplayState::Stopping {
-                    session,
-                    pending_restart: None,
+                    worker,
+                    queued_start: None,
                 };
             }
         }
     }
 
     pub(crate) fn submit_frame(&self, composited: &RgbaImage) {
-        if let DisplayState::Running(session) = &self.state {
+        if let DisplayState::Running(worker) = &self.state {
             if let Some(bytes) = self
                 .status
                 .encoder()
                 .and_then(|encoder| encoder.prepare(composited).ok())
             {
-                session.submit_frame(bytes);
+                worker.submit_frame(bytes);
             }
         }
     }
 
     pub(crate) fn poll_lifecycle(&mut self) -> Vec<DisplayNotice> {
-        let events = self.drain_session_events();
+        let events = self.drain_worker_events();
         self.join_finished();
         events
             .into_iter()
@@ -191,27 +211,27 @@ impl DisplayController {
 
     fn join_finished(&mut self) {
         match std::mem::replace(&mut self.state, DisplayState::Idle) {
-            DisplayState::Running(mut session) => {
-                if session.join_if_finished() {
+            DisplayState::Running(mut worker) => {
+                if worker.join_if_finished() {
                     self.state = DisplayState::Idle;
                 } else {
-                    self.state = DisplayState::Running(session);
+                    self.state = DisplayState::Running(worker);
                 }
             }
             DisplayState::Stopping {
-                mut session,
-                pending_restart,
+                mut worker,
+                queued_start,
             } => {
-                if session.join_if_finished() {
-                    if let Some(pending_start) = pending_restart {
-                        self.start(pending_start);
+                if worker.join_if_finished() {
+                    if let Some(worker_start) = queued_start {
+                        self.start(worker_start);
                     } else {
                         self.state = DisplayState::Idle;
                     }
                 } else {
                     self.state = DisplayState::Stopping {
-                        session,
-                        pending_restart,
+                        worker,
+                        queued_start,
                     };
                 }
             }
@@ -228,11 +248,26 @@ impl DisplayController {
         )
     }
 
-    fn start(&mut self, pending_start: PendingStart) {
-        self.state = DisplayState::Running(Box::new(DisplaySession::start(
-            pending_start.driver,
-            pending_start.frame,
-        )));
+    fn start(&mut self, worker_start: WorkerStart) {
+        let (driver, frame) = match worker_start {
+            WorkerStart::Detected { driver, frame } => {
+                self.status = DisplayStatus::from_driver(&driver);
+                (driver, frame)
+            }
+            WorkerStart::Reopen {
+                info,
+                capability,
+                frame,
+            } => {
+                let Some(driver) = self.detect_matching_driver(&info, capability) else {
+                    self.state = DisplayState::Idle;
+                    return;
+                };
+                (driver, frame)
+            }
+        };
+
+        self.state = DisplayState::Running(Box::new(DisplayWorker::start(driver, frame)));
     }
 
     fn refresh_status(&mut self) {
@@ -242,7 +277,7 @@ impl DisplayController {
             .unwrap_or_else(DisplayStatus::disconnected);
     }
 
-    fn detect_pending_start<F>(&mut self, render: F) -> Option<PendingStart>
+    fn detect_worker_start<F>(&mut self, render: F) -> Option<WorkerStart>
     where
         F: FnOnce(Resolution) -> RgbaImage,
     {
@@ -255,13 +290,65 @@ impl DisplayController {
         let frame = DisplayFrameEncoder::from_driver(&driver)
             .prepare(&composited)
             .ok()?;
-        Some(PendingStart { driver, frame })
+        Some(WorkerStart::Detected { driver, frame })
     }
 
-    fn drain_session_events(&mut self) -> Vec<DisplayLoopEvent> {
+    fn prepare_frame_from_status<F>(&self, render: F) -> Option<DisplayFrame>
+    where
+        F: FnOnce(Resolution) -> RgbaImage,
+    {
+        let (info, capability) = match &self.status {
+            DisplayStatus::Connected { info, capability } => (info, *capability),
+            DisplayStatus::Disconnected => return None,
+        };
+        DisplayFrameEncoder::new(info.clone(), capability)
+            .prepare(&render(info.resolution))
+            .ok()
+    }
+
+    fn prepare_reopen_from_status<F>(&self, render: F) -> Option<WorkerStart>
+    where
+        F: FnOnce(Resolution) -> RgbaImage,
+    {
+        let (info, capability) = match &self.status {
+            DisplayStatus::Connected { info, capability } => (info.clone(), *capability),
+            DisplayStatus::Disconnected => return None,
+        };
+        let frame = DisplayFrameEncoder::new(info.clone(), capability)
+            .prepare(&render(info.resolution))
+            .ok()?;
+        Some(WorkerStart::Reopen {
+            info,
+            capability,
+            frame,
+        })
+    }
+
+    fn detect_matching_driver(
+        &mut self,
+        expected_info: &DeviceInfo,
+        expected_capability: DisplayCapability,
+    ) -> Option<DisplayDriver> {
+        let Some(driver) = coolcooler_driver::detect_device() else {
+            self.status = DisplayStatus::disconnected();
+            return None;
+        };
+        self.status = DisplayStatus::from_driver(&driver);
+        if driver.capability() == expected_capability
+            && driver.info().name == expected_info.name
+            && driver.info().resolution == expected_info.resolution
+            && driver.info().rotation == expected_info.rotation
+        {
+            Some(driver)
+        } else {
+            None
+        }
+    }
+
+    fn drain_worker_events(&mut self) -> Vec<DisplayLoopEvent> {
         match &mut self.state {
-            DisplayState::Running(session) => session.drain_events(),
-            DisplayState::Stopping { session, .. } => session.drain_events(),
+            DisplayState::Running(worker) => worker.drain_events(),
+            DisplayState::Stopping { worker, .. } => worker.drain_events(),
             DisplayState::Idle => Vec::new(),
         }
     }
@@ -283,14 +370,14 @@ impl DisplayController {
     }
 }
 
-pub(crate) struct DisplaySession {
+pub(crate) struct DisplayWorker {
     stop: Arc<AtomicBool>,
     shared_frame: Arc<Mutex<DisplayFrame>>,
     event_rx: mpsc::Receiver<DisplayLoopEvent>,
     join: Option<thread::JoinHandle<()>>,
 }
 
-impl DisplaySession {
+impl DisplayWorker {
     pub(crate) fn start(driver: DisplayDriver, initial_frame: DisplayFrame) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let shared_frame = Arc::new(Mutex::new(initial_frame));
@@ -357,7 +444,7 @@ impl DisplaySession {
     }
 }
 
-impl DisplaySessionHandle for DisplaySession {
+impl DisplayWorkerHandle for DisplayWorker {
     fn submit_frame(&self, bytes: DisplayFrame) {
         Self::submit_frame(self, bytes);
     }
@@ -375,7 +462,7 @@ impl DisplaySessionHandle for DisplaySession {
     }
 }
 
-impl Drop for DisplaySession {
+impl Drop for DisplayWorker {
     fn drop(&mut self) {
         self.request_stop();
         self.join_in_background();
@@ -385,16 +472,19 @@ impl Drop for DisplaySession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use coolcooler_core::Rotation;
+    use image::{Rgba, RgbaImage};
     use std::sync::atomic::AtomicUsize;
+    use std::time::Duration;
 
-    struct FakeSession {
+    struct FakeWorker {
         finished: bool,
         stop_requests: Arc<AtomicUsize>,
         joined: Arc<AtomicUsize>,
         submitted: Arc<Mutex<Vec<DisplayFrame>>>,
     }
 
-    impl FakeSession {
+    impl FakeWorker {
         fn new(finished: bool) -> Self {
             Self {
                 finished,
@@ -405,7 +495,7 @@ mod tests {
         }
     }
 
-    impl DisplaySessionHandle for FakeSession {
+    impl DisplayWorkerHandle for FakeWorker {
         fn submit_frame(&self, frame: DisplayFrame) {
             self.submitted.lock().unwrap().push(frame);
         }
@@ -435,6 +525,26 @@ mod tests {
         }
     }
 
+    fn fake_info() -> DeviceInfo {
+        DeviceInfo {
+            name: "Fake cooler".to_string(),
+            resolution: Resolution::new(320, 240),
+            rotation: Rotation::None,
+            target_fps: 20.0,
+            keepalive_interval: Duration::from_secs(1),
+        }
+    }
+
+    fn connected_controller_with(state: DisplayState) -> DisplayController {
+        DisplayController {
+            state,
+            status: DisplayStatus::Connected {
+                info: fake_info(),
+                capability: DisplayCapability::FileTransfer,
+            },
+        }
+    }
+
     #[test]
     fn disconnected_controller_has_no_device_info() {
         let controller = controller_with(DisplayState::Idle);
@@ -445,10 +555,10 @@ mod tests {
     }
 
     #[test]
-    fn finished_running_session_is_reaped() {
-        let session = FakeSession::new(true);
-        let joined = Arc::clone(&session.joined);
-        let mut controller = controller_with(DisplayState::Running(Box::new(session)));
+    fn finished_running_worker_is_reaped() {
+        let worker = FakeWorker::new(true);
+        let joined = Arc::clone(&worker.joined);
+        let mut controller = controller_with(DisplayState::Running(Box::new(worker)));
 
         controller.join_finished();
 
@@ -457,10 +567,10 @@ mod tests {
     }
 
     #[test]
-    fn unfinished_running_session_stays_running() {
-        let session = FakeSession::new(false);
-        let joined = Arc::clone(&session.joined);
-        let mut controller = controller_with(DisplayState::Running(Box::new(session)));
+    fn unfinished_running_worker_stays_running() {
+        let worker = FakeWorker::new(false);
+        let joined = Arc::clone(&worker.joined);
+        let mut controller = controller_with(DisplayState::Running(Box::new(worker)));
 
         controller.join_finished();
 
@@ -469,12 +579,56 @@ mod tests {
     }
 
     #[test]
-    fn stopping_session_without_restart_goes_idle_after_join() {
-        let session = FakeSession::new(true);
-        let joined = Arc::clone(&session.joined);
+    fn present_while_running_submits_frame_without_stopping_worker() {
+        let worker = FakeWorker::new(false);
+        let stop_requests = Arc::clone(&worker.stop_requests);
+        let submitted = Arc::clone(&worker.submitted);
+        let mut controller = connected_controller_with(DisplayState::Running(Box::new(worker)));
+
+        controller.present_with(|resolution| {
+            assert_eq!(resolution, Resolution::new(320, 240));
+            RgbaImage::from_pixel(resolution.width, resolution.height, Rgba([1, 2, 3, 255]))
+        });
+
+        assert!(matches!(controller.state, DisplayState::Running(_)));
+        assert_eq!(stop_requests.load(Ordering::Relaxed), 0);
+        let frames = submitted.lock().unwrap();
+        assert_eq!(frames.len(), 1);
+        assert!(matches!(&frames[0], DisplayFrame::FileTransferPng(_)));
+    }
+
+    #[test]
+    fn present_while_stopping_queues_reopen_without_extra_stop_request() {
+        let worker = FakeWorker::new(false);
+        let stop_requests = Arc::clone(&worker.stop_requests);
+        let mut controller = connected_controller_with(DisplayState::Stopping {
+            worker: Box::new(worker),
+            queued_start: None,
+        });
+
+        controller.present_with(|resolution| {
+            assert_eq!(resolution, Resolution::new(320, 240));
+            RgbaImage::from_pixel(resolution.width, resolution.height, Rgba([4, 5, 6, 255]))
+        });
+
+        assert_eq!(stop_requests.load(Ordering::Relaxed), 0);
+        let DisplayState::Stopping {
+            queued_start: Some(WorkerStart::Reopen { frame, .. }),
+            ..
+        } = &controller.state
+        else {
+            panic!("stopping worker should keep a queued start");
+        };
+        assert!(matches!(frame, DisplayFrame::FileTransferPng(_)));
+    }
+
+    #[test]
+    fn stopping_worker_without_queued_start_goes_idle_after_join() {
+        let worker = FakeWorker::new(true);
+        let joined = Arc::clone(&worker.joined);
         let mut controller = controller_with(DisplayState::Stopping {
-            session: Box::new(session),
-            pending_restart: None,
+            worker: Box::new(worker),
+            queued_start: None,
         });
 
         controller.join_finished();

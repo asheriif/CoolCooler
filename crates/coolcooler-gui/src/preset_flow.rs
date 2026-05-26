@@ -187,7 +187,7 @@ impl CoolCooler {
             name: name.clone(),
         });
         let skipped_widgets = self.apply_preset_config(&data);
-        self.start_display();
+        self.present_display();
         preset::remember_last_used(&folder);
 
         if !silent || self.ui.status_message.is_empty() {

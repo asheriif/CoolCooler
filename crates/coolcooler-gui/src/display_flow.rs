@@ -1,21 +1,21 @@
 use crate::canvas_editor::render_composited;
-use crate::display_session::DisplayNotice;
+use crate::display_worker::DisplayNotice;
 use crate::CoolCooler;
 
 impl CoolCooler {
-    pub(crate) fn start_display(&mut self) {
+    pub(crate) fn present_display(&mut self) {
         let source = &self.source;
         let canvas = &self.canvas;
         let widget_ctx = self.widgets.context();
         self.display
-            .restart_with(|resolution| render_composited(source, canvas, widget_ctx, resolution));
+            .present_with(|resolution| render_composited(source, canvas, widget_ctx, resolution));
     }
 
     pub(crate) fn stop_display(&mut self) {
         self.display.stop();
     }
 
-    pub(crate) fn reap_display_session(&mut self) {
+    pub(crate) fn poll_display_worker(&mut self) {
         for notice in self.display.poll_lifecycle() {
             match notice {
                 DisplayNotice::Started(name) => {

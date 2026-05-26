@@ -59,7 +59,7 @@ impl CoolCooler {
                 };
                 self.ui.status_message = format!("{}{detail}", summary.filename);
                 self.rebuild_preview();
-                self.start_display();
+                self.present_display();
             }
             Err(e) => {
                 if self.source.fail_loading(&request) {
