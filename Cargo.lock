@@ -753,7 +753,7 @@ dependencies = [
 
 [[package]]
 name = "coolcooler-core"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "fast_image_resize",
  "image",
@@ -762,7 +762,7 @@ dependencies = [
 
 [[package]]
 name = "coolcooler-driver"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "coolcooler-core",
  "coolcooler-idcooling",
@@ -773,7 +773,7 @@ dependencies = [
 
 [[package]]
 name = "coolcooler-gui"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "ab_glyph",
  "chrono",
@@ -794,7 +794,7 @@ dependencies = [
 
 [[package]]
 name = "coolcooler-idcooling"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "coolcooler-core",
  "hidapi",
@@ -802,7 +802,7 @@ dependencies = [
 
 [[package]]
 name = "coolcooler-liquidctl"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "coolcooler-core",
 ]
