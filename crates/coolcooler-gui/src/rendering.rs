@@ -1,5 +1,4 @@
-use coolcooler_core::Resolution;
-use fast_image_resize as fir;
+use coolcooler_core::{frame, Resolution};
 use iced::widget::image::Handle;
 use image::{imageops, Rgba, RgbaImage};
 
@@ -43,24 +42,10 @@ pub(crate) fn render_base_rgba(
 }
 
 fn resize_rgba(source: &RgbaImage, width: u32, height: u32) -> RgbaImage {
-    let (sw, sh) = (source.width(), source.height());
-    if sw == width && sh == height {
-        return source.clone();
+    match frame::resize_rgba8(source, width, height) {
+        Ok(resized) => resized,
+        Err(_) => RgbaImage::new(width, height),
     }
-    let src_img =
-        fir::images::Image::from_vec_u8(sw, sh, source.as_raw().clone(), fir::PixelType::U8x4)
-            .unwrap();
-    let mut dst_img = fir::images::Image::new(width, height, fir::PixelType::U8x4);
-    let mut resizer = fir::Resizer::new();
-    resizer
-        .resize(
-            &src_img,
-            &mut dst_img,
-            &fir::ResizeOptions::new()
-                .resize_alg(fir::ResizeAlg::Convolution(fir::FilterType::CatmullRom)),
-        )
-        .unwrap();
-    RgbaImage::from_raw(width, height, dst_img.into_vec()).unwrap()
 }
 
 pub(crate) fn circular_preview_from_rgba(mut rgba: RgbaImage) -> Handle {

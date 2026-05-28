@@ -13,7 +13,6 @@ coolcooler-core = { path = "../coolcooler-core" }
 coolcooler-driver = { path = "../coolcooler-driver" }
 iced = { version = "0.14", features = ["image", "tokio"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "bmp", "gif", "webp"] }
-fast_image_resize = "5"
 ab_glyph = "0.2"
 imageproc = "0.25"
 chrono = "0.4"

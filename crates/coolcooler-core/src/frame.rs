@@ -1,7 +1,7 @@
 use fast_image_resize as fir;
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops;
-use image::{DynamicImage, ImageEncoder, RgbImage};
+use image::{DynamicImage, ImageEncoder, RgbImage, RgbaImage};
 use std::borrow::Cow;
 
 use crate::{DeviceInfo, Error, Resolution, Result, Rotation};
@@ -9,13 +9,70 @@ use crate::{DeviceInfo, Error, Resolution, Result, Rotation};
 /// Default JPEG encoding quality (0-100).
 pub const DEFAULT_JPEG_QUALITY: u8 = 85;
 
+/// Resize an RGB image to the target dimensions.
+pub fn resize_rgb8(source: &RgbImage, width: u32, height: u32) -> Result<RgbImage> {
+    if source.width() == width && source.height() == height {
+        return Ok(source.clone());
+    }
+
+    let resized = resize_u8(
+        source.as_raw(),
+        source.width(),
+        source.height(),
+        width,
+        height,
+        fir::PixelType::U8x3,
+    )?;
+    RgbImage::from_raw(width, height, resized)
+        .ok_or_else(|| Error::Image("resize produced wrong RGB buffer size".to_string()))
+}
+
+/// Resize an RGBA image to the target dimensions.
+pub fn resize_rgba8(source: &RgbaImage, width: u32, height: u32) -> Result<RgbaImage> {
+    if source.width() == width && source.height() == height {
+        return Ok(source.clone());
+    }
+
+    let resized = resize_u8(
+        source.as_raw(),
+        source.width(),
+        source.height(),
+        width,
+        height,
+        fir::PixelType::U8x4,
+    )?;
+    RgbaImage::from_raw(width, height, resized)
+        .ok_or_else(|| Error::Image("resize produced wrong RGBA buffer size".to_string()))
+}
+
+fn resize_u8(
+    source: &[u8],
+    source_width: u32,
+    source_height: u32,
+    width: u32,
+    height: u32,
+    pixel_type: fir::PixelType,
+) -> Result<Vec<u8>> {
+    let source_image = fir::images::ImageRef::new(source_width, source_height, source, pixel_type)
+        .map_err(|e| Error::Image(e.to_string()))?;
+    let mut destination_image = fir::images::Image::new(width, height, pixel_type);
+    let options = fir::ResizeOptions::new()
+        .resize_alg(fir::ResizeAlg::Convolution(fir::FilterType::CatmullRom));
+
+    fir::Resizer::new()
+        .resize(&source_image, &mut destination_image, &options)
+        .map_err(|e| Error::Image(e.to_string()))?;
+
+    Ok(destination_image.into_vec())
+}
+
 /// Center-crop and resize an image to the target resolution.
 ///
 /// Crops to match the target aspect ratio (removing excess width or height),
 /// then resizes to the exact target dimensions using SIMD-accelerated bicubic
 /// filtering via `fast_image_resize`.
 /// Does NOT apply rotation or JPEG encoding.
-pub fn crop_and_resize(img: &DynamicImage, resolution: Resolution) -> RgbImage {
+pub fn crop_and_resize(img: &DynamicImage, resolution: Resolution) -> Result<RgbImage> {
     let mut rgb = img.to_rgb8();
     let (src_w, src_h) = (rgb.width(), rgb.height());
 
@@ -36,27 +93,10 @@ pub fn crop_and_resize(img: &DynamicImage, resolution: Resolution) -> RgbImage {
     // Fast SIMD-accelerated resize
     let (cw, ch) = (rgb.width(), rgb.height());
     if cw == resolution.width && ch == resolution.height {
-        return rgb;
+        return Ok(rgb);
     }
 
-    let src_image =
-        fir::images::Image::from_vec_u8(cw, ch, rgb.into_raw(), fir::PixelType::U8x3).unwrap();
-
-    let mut dst_image =
-        fir::images::Image::new(resolution.width, resolution.height, fir::PixelType::U8x3);
-
-    let mut resizer = fir::Resizer::new();
-    resizer
-        .resize(
-            &src_image,
-            &mut dst_image,
-            &fir::ResizeOptions::new()
-                .resize_alg(fir::ResizeAlg::Convolution(fir::FilterType::CatmullRom)),
-        )
-        .unwrap();
-
-    RgbImage::from_raw(resolution.width, resolution.height, dst_image.into_vec())
-        .expect("resize produced wrong buffer size")
+    resize_rgb8(&rgb, resolution.width, resolution.height)
 }
 
 /// Apply rotation and JPEG-encode an already-resized image.
@@ -91,6 +131,30 @@ pub fn encode_resized(rgb: &RgbImage, rotation: Rotation, quality: u8) -> Result
 /// If you also need the resized image for other purposes, use
 /// [`crop_and_resize`] + [`encode_resized`] instead.
 pub fn prepare(img: &DynamicImage, info: &DeviceInfo, quality: u8) -> Result<Vec<u8>> {
-    let resized = crop_and_resize(img, info.resolution);
+    let resized = crop_and_resize(img, info.resolution)?;
     encode_resized(&resized, info.rotation, quality)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{Rgb, Rgba};
+
+    #[test]
+    fn resize_rgb8_returns_requested_dimensions() {
+        let source = RgbImage::from_pixel(8, 8, Rgb([255, 0, 0]));
+
+        let resized = resize_rgb8(&source, 4, 6).unwrap();
+
+        assert_eq!((resized.width(), resized.height()), (4, 6));
+    }
+
+    #[test]
+    fn resize_rgba8_returns_requested_dimensions() {
+        let source = RgbaImage::from_pixel(8, 8, Rgba([255, 0, 0, 255]));
+
+        let resized = resize_rgba8(&source, 4, 6).unwrap();
+
+        assert_eq!((resized.width(), resized.height()), (4, 6));
+    }
 }
