@@ -18,6 +18,7 @@ use schema::{LastPresetData, PresetAsset};
 
 const APP_DIR_NAME: &str = "coolcooler";
 const LAST_PRESET_FILE: &str = "last_preset.json";
+const PREVIEW_FILE: &str = "preview.png";
 
 /// Root directory for all presets.
 pub fn presets_dir() -> PathBuf {
@@ -157,7 +158,7 @@ fn write_preset_contents(
         fs::copy(src, &dest).map_err(|e| format!("Failed to copy background: {e}"))?;
     }
 
-    let preview_path = preset_dir.join("preview.png");
+    let preview_path = preset_dir.join(PREVIEW_FILE);
     let mut png_buf = Vec::new();
     PngEncoder::new(&mut png_buf)
         .write_image(
@@ -237,7 +238,7 @@ pub fn list() -> Vec<PresetEntry> {
             .map(|d| d.name)
             .unwrap_or_else(|| folder.as_str().to_string());
 
-        let preview_path = path.join("preview.png");
+        let preview_path = path.join(PREVIEW_FILE);
         let preview_path = preview_path.exists().then_some(preview_path);
 
         presets.push(PresetEntry {
