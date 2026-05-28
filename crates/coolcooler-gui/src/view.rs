@@ -9,6 +9,18 @@ use crate::style::AppColors;
 use crate::widget::WidgetControl;
 use crate::{widget, CoolCooler, LayerOption, Message};
 
+const SWATCHES: [[u8; 4]; 9] = [
+    [255, 255, 255, 255],
+    [220, 220, 220, 255],
+    [80, 255, 80, 255],
+    [255, 80, 60, 255],
+    [0, 180, 255, 255],
+    [255, 200, 50, 255],
+    [255, 140, 0, 255],
+    [200, 80, 255, 255],
+    [255, 105, 180, 255],
+];
+
 pub(crate) fn view(app: &CoolCooler, _window_id: window::Id) -> Element<'_, Message> {
     let c = app.colors();
 
@@ -265,23 +277,11 @@ fn opacity_control(opacity_val: f32, c: &AppColors) -> Element<'_, Message> {
 }
 
 fn color_controls(current_color: [u8; 4], c: &AppColors) -> Element<'_, Message> {
-    let colors: Vec<[u8; 4]> = vec![
-        [255, 255, 255, 255],
-        [220, 220, 220, 255],
-        [80, 255, 80, 255],
-        [255, 80, 60, 255],
-        [0, 180, 255, 255],
-        [255, 200, 50, 255],
-        [255, 140, 0, 255],
-        [200, 80, 255, 255],
-        [255, 105, 180, 255],
-    ];
-
     let mut swatches = row![text("Color").size(12).color(c.text_dim).width(60)]
         .spacing(4)
         .align_y(iced::Alignment::Center);
 
-    for color in colors {
+    for color in SWATCHES {
         let is_selected = current_color[0..3] == color[0..3];
         let border_color = if is_selected {
             Color::WHITE
