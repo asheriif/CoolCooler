@@ -129,7 +129,7 @@ impl DisplayController {
         F: FnOnce(Resolution) -> RgbaImage,
     {
         if matches!(self.state, DisplayState::Running(_)) {
-            match self.prepare_frame_from_status(render) {
+            match self.frame_from_status(render) {
                 Some(frame) => {
                     if let DisplayState::Running(worker) = &self.state {
                         worker.submit_frame(frame);
@@ -293,17 +293,12 @@ impl DisplayController {
         Some(WorkerStart::Detected { driver, frame })
     }
 
-    fn prepare_frame_from_status<F>(&self, render: F) -> Option<DisplayFrame>
+    fn frame_from_status<F>(&self, render: F) -> Option<DisplayFrame>
     where
         F: FnOnce(Resolution) -> RgbaImage,
     {
-        let (info, capability) = match &self.status {
-            DisplayStatus::Connected { info, capability } => (info, *capability),
-            DisplayStatus::Disconnected => return None,
-        };
-        DisplayFrameEncoder::new(info.clone(), capability)
-            .prepare(&render(info.resolution))
-            .ok()
+        let resolution = self.status.info()?.resolution;
+        self.status.encoder()?.prepare(&render(resolution)).ok()
     }
 
     fn prepare_reopen_from_status<F>(&self, render: F) -> Option<WorkerStart>
@@ -314,9 +309,7 @@ impl DisplayController {
             DisplayStatus::Connected { info, capability } => (info.clone(), *capability),
             DisplayStatus::Disconnected => return None,
         };
-        let frame = DisplayFrameEncoder::new(info.clone(), capability)
-            .prepare(&render(info.resolution))
-            .ok()?;
+        let frame = self.frame_from_status(render)?;
         Some(WorkerStart::Reopen {
             info,
             capability,
