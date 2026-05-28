@@ -396,36 +396,8 @@ impl DisplayWorker {
         }
     }
 
-    fn submit_frame(&self, bytes: DisplayFrame) {
-        if let Ok(mut frame) = self.shared_frame.lock() {
-            *frame = bytes;
-        }
-    }
-
-    fn request_stop(&self) {
-        self.stop.store(true, Ordering::Relaxed);
-    }
-
     fn is_finished(&self) -> bool {
         self.join.as_ref().is_none_or(|join| join.is_finished())
-    }
-
-    fn join_if_finished(&mut self) -> bool {
-        if !self.is_finished() {
-            return false;
-        }
-        if let Some(join) = self.join.take() {
-            let _ = join.join();
-        }
-        true
-    }
-
-    fn drain_events(&mut self) -> Vec<DisplayLoopEvent> {
-        let mut events = Vec::new();
-        while let Ok(event) = self.event_rx.try_recv() {
-            events.push(event);
-        }
-        events
     }
 
     fn join_in_background(&mut self) {
@@ -439,25 +411,37 @@ impl DisplayWorker {
 
 impl DisplayWorkerHandle for DisplayWorker {
     fn submit_frame(&self, bytes: DisplayFrame) {
-        Self::submit_frame(self, bytes);
+        if let Ok(mut frame) = self.shared_frame.lock() {
+            *frame = bytes;
+        }
     }
 
     fn request_stop(&self) {
-        Self::request_stop(self);
+        self.stop.store(true, Ordering::Relaxed);
     }
 
     fn drain_events(&mut self) -> Vec<DisplayLoopEvent> {
-        Self::drain_events(self)
+        let mut events = Vec::new();
+        while let Ok(event) = self.event_rx.try_recv() {
+            events.push(event);
+        }
+        events
     }
 
     fn join_if_finished(&mut self) -> bool {
-        Self::join_if_finished(self)
+        if !self.is_finished() {
+            return false;
+        }
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+        true
     }
 }
 
 impl Drop for DisplayWorker {
     fn drop(&mut self) {
-        self.request_stop();
+        <Self as DisplayWorkerHandle>::request_stop(self);
         self.join_in_background();
     }
 }
