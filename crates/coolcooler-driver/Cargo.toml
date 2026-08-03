@@ -11,7 +11,7 @@ coolcooler-liquidctl = { path = "../coolcooler-liquidctl" }
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-hidapi = { version = "2", default-features = false, features = ["linux-static-libusb"] }
+hidapi = { version = "2", default-features = false, features = ["linux-static-hidraw"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 hidapi = { version = "2", default-features = false }

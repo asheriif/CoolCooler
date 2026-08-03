@@ -41,12 +41,12 @@ For ID-Cooling native USB access, install the udev rule once:
 sudo ./install-udev-rules.sh
 ```
 
-The installer reloads and triggers udev rules. If the cooler is still not detected afterward, reboot so the new device permissions are applied cleanly. For `liquidctl` devices, make sure `liquidctl` is installed and can control the device from your user session.
+The installer grants the active desktop user access to the cooler's HID device, removes the legacy raw-USB rule, then reloads and triggers udev rules. If the cooler is still not detected afterward, reboot so the new device permissions are applied cleanly. For `liquidctl` devices, make sure `liquidctl` is installed and can control the device from your user session.
 
 Download the built AppImage from releases and double click it, or build it (see below), then run:
 
 ```bash
-./dist/CoolCooler-0.1.5-x86_64.AppImage
+./dist/CoolCooler-0.1.6-x86_64.AppImage
 ```
 
 ## Build From Source
@@ -100,7 +100,7 @@ packaging/appimage/build-appimage-in-distrobox.sh
 Output is written to:
 
 ```text
-dist/CoolCooler-0.1.5-x86_64.AppImage
+dist/CoolCooler-0.1.6-x86_64.AppImage
 ```
 
 The wrapper enters the `CoolCoolerAppImage` distrobox, loads Rust from `$HOME/.cargo/env`, builds `coolcooler-gui` in release mode, downloads `linuxdeploy` if needed, and writes the finished AppImage to `dist/`. To use a differently named container, set `COOLCOOLER_DISTROBOX=YourBoxName` before running the wrapper.

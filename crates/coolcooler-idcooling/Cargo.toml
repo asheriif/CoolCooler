@@ -6,4 +6,9 @@ license.workspace = true
 
 [dependencies]
 coolcooler-core = { path = "../coolcooler-core" }
-hidapi = { version = "2", default-features = false, features = ["linux-static-libusb"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+hidapi = { version = "2", default-features = false, features = ["linux-static-hidraw"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+hidapi = { version = "2", default-features = false }

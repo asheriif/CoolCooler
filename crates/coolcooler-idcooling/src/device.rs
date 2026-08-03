@@ -36,6 +36,11 @@ impl Fx360 {
         }
     }
 
+    /// Whether a USB HID device belongs to the FX360 controller family.
+    pub fn matches_device(vendor_id: u16, product_id: u16) -> bool {
+        vendor_id == VENDOR_ID && product_id == PRODUCT_ID
+    }
+
     /// Write a 1024-byte protocol packet, prepending the HID report ID.
     fn write_packet(&self, data: &[u8; PACKET_SIZE]) -> Result<()> {
         let device = self.device.as_ref().ok_or(Error::NotConnected)?;
@@ -97,5 +102,17 @@ impl CoolerLcd for Fx360 {
 impl Drop for Fx360 {
     fn drop(&mut self) {
         self.disconnect();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matches_fx360_usb_ids() {
+        assert!(Fx360::matches_device(0x2000, 0x3000));
+        assert!(!Fx360::matches_device(0x2000, 0x3001));
+        assert!(!Fx360::matches_device(0x2001, 0x3000));
     }
 }
